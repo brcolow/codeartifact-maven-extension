@@ -119,6 +119,11 @@ The following configuration parameters are optional:
 </properties>
 ```
 
+## Known Issues
+
+Codeartifact sometimes reports that it can't upload a checksum file. This is not our fault - it is a [known Codeartifact issue](https://repost.aws/questions/QUPTjhfj0cSYqEk7TgZJRKnw/maven-fails-to-upload-maven-metadata-xml-checksum).
+The recommended fix is to add Maven property `-Daether.checksums.algorithms=MD5` when deploying to the Codeartifact repository.
+
 ## TODO
 
 * Cache the repository endpoint and authorization token with its expiration timestamp so we only have to fetch them when
