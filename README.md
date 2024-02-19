@@ -19,9 +19,9 @@ You can add `codeartifact-maven-extension` to your projects `pom.xml` like so:
 <build>
   <extensions>
     <extension>
-      <groupId>com.brcolow.codeartifact</groupId>
+      <groupId>io.github.brcolow</groupId>
       <artifactId>codeartifact-maven-extension</artifactId>
-      <version>0.1-SNAPSHOT</version>
+      <version>0.0.1</version>
     </extension>
   </extensions>
   <plugins>
