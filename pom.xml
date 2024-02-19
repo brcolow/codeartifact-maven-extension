@@ -10,12 +10,29 @@
 
     <name>AWS CodeArtifact Maven Extension</name>
     <description>Automatically retrieves CodeArtifact authentication tokens and uses Codeartifact as your remote repository.</description>
+    <url>https://github.com/brcolow/codeartifact-maven-extension</url>
+    <inceptionYear>2022</inceptionYear>
 
     <properties>
         <maven.compiler.source>12</maven.compiler.source>
         <maven.compiler.target>12</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://github.com/brcolow/codeartifact-maven-extension/blob/master/LICENSE</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <name>Michael Ennen</name>
+            <url>https://github.com/brcolow</url>
+        </developer>
+    </developers>
 
     <scm>
         <connection>scm:git:git://github.com/brcolow/codeartifact-maven-extension.git</connection>
