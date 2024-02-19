@@ -19,7 +19,7 @@
 
     <scm>
         <connection>scm:git:git://github.com/brcolow/codeartifact-maven-extension.git</connection>
-        <developerConnection>scm:git:ssh://github.com:brcolow/codeartifact-maven-extension.git</developerConnection>
+        <developerConnection>scm:git:https://github.com/brcolow/codeartifact-maven-extension.git</developerConnection>
         <url>http://github.com/brcolow/codeartifact-maven-extension/tree/master</url>
     </scm>
 
