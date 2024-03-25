@@ -6,13 +6,15 @@ public class Configuration {
     private final int durationSeconds;
     private final String repository;
     private final String profile;
+    private final boolean prune;
 
-    public Configuration(String domain, String domainOwner, int durationSeconds, String repository, String profile) {
+    public Configuration(String domain, String domainOwner, int durationSeconds, String repository, String profile, boolean prune) {
         this.domain = domain;
         this.domainOwner = domainOwner;
         this.durationSeconds = durationSeconds;
         this.repository = repository;
         this.profile = profile;
+        this.prune = prune;
     }
 
     public String getDomain() {
@@ -35,6 +37,10 @@ public class Configuration {
         return profile;
     }
 
+    public boolean isPrune() {
+        return prune;
+    }
+
     @Override
     public String toString() {
         return "Configuration{" +
@@ -43,6 +49,7 @@ public class Configuration {
                 ", durationSeconds=" + durationSeconds +
                 ", repository='" + repository + '\'' +
                 ", profile='" + profile + '\'' +
+                ", prune='" + prune + '\'' +
                 '}';
     }
 }

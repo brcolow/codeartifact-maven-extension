@@ -47,8 +47,9 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         }
 
         String profile = session.getCurrentProject().getProperties().getProperty("codeartifact.profile", "codeartifact");
+        String prune = session.getCurrentProject().getProperties().getProperty("codeartifact.prune", "false");
 
-        configuration = new Configuration(domain, domainOwner, durationSeconds, repository, profile);
+        configuration = new Configuration(domain, domainOwner, durationSeconds, repository, profile, Boolean.parseBoolean(prune));
 
         ArtifactRepository codeartifactRepository;
         try {
@@ -73,9 +74,7 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
 
     @Override
     public void afterSessionEnd(MavenSession session) throws MavenExecutionException {
-        String prune = session.getCurrentProject().getProperties().getProperty("codeartifact.prune", "false");
-
-        if (!Boolean.parseBoolean(prune)) {
+        if (!configuration.isPrune()) {
             return;
         }
 
