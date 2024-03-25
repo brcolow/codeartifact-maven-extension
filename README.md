@@ -129,8 +129,8 @@ The recommended fix is to add Maven property `-Daether.checksums.algorithms=MD5`
 
 ```shell
 ./mvnw versions:set -DnewVersion=0.0.2
-mvn release:clean release:prepare
-mvn release:perform
+./mvnw release:clean release:prepare
+./mvnw release:perform
 ```
 
 ## TODO
