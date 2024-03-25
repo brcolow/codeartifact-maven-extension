@@ -15,15 +15,12 @@ import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider;
 import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.services.codeartifact.CodeartifactClient;
-import software.amazon.awssdk.services.codeartifact.model.GetAuthorizationTokenRequest;
-import software.amazon.awssdk.services.codeartifact.model.GetAuthorizationTokenResponse;
-import software.amazon.awssdk.services.codeartifact.model.GetRepositoryEndpointRequest;
-import software.amazon.awssdk.services.codeartifact.model.GetRepositoryEndpointResponse;
-import software.amazon.awssdk.services.codeartifact.model.PackageFormat;
+import software.amazon.awssdk.services.codeartifact.model.*;
 
 import javax.inject.Named;
 import java.util.List;
 import java.util.Properties;
+import java.util.stream.Collectors;
 
 @Named
 @SuppressWarnings("unused")
@@ -31,6 +28,7 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
     @Requirement
     private final Logger logger = LoggerFactory.getLogger(CodeartifactRepositorySetter.class);
     private static CodeartifactClient codeartifactClient;
+    private static Configuration configuration;
 
     @Override
     public void afterProjectsRead(final MavenSession session) throws MavenExecutionException {
@@ -46,12 +44,11 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         }
         if (durationSeconds <= 0 || durationSeconds > 43200) {
             logger.error("\"codeartifact.durationSeconds\" property must be greater than 0 and less than or equal to 43200.");
-
         }
+
         String profile = session.getCurrentProject().getProperties().getProperty("codeartifact.profile", "codeartifact");
 
-        Configuration configuration = new Configuration(domain, domainOwner,
-                durationSeconds, repository, profile);
+        configuration = new Configuration(domain, domainOwner, durationSeconds, repository, profile);
 
         ArtifactRepository codeartifactRepository;
         try {
@@ -72,6 +69,52 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         mavenCentralMirror.setUrl(codeartifactRepository.getUrl());
         mavenCentralMirror.setMirrorOf("central");
         session.getRequest().setMirrors(List.of(mavenCentralMirror));
+    }
+
+    @Override
+    public void afterSessionEnd(MavenSession session) throws MavenExecutionException {
+        String prune = session.getCurrentProject().getProperties().getProperty("codeartifact.prune", "false");
+
+        if (!Boolean.parseBoolean(prune)) {
+            return;
+        }
+
+        logger.info("Pruning Codeartifact repository of Unlisted snapshots...");
+        ListPackagesResponse listPackagesResponse = getCodeArtifactClient(configuration.getProfile()).listPackages(
+                ListPackagesRequest.builder()
+                        .domain(configuration.getDomain())
+                        .domainOwner(configuration.getDomainOwner())
+                        .format(PackageFormat.MAVEN)
+                        .repository(configuration.getRepository())
+                        .build());
+
+        for (PackageSummary packageSummary : listPackagesResponse.packages()) {
+            ListPackageVersionsResponse listPackageVersionsResponse = getCodeArtifactClient(configuration.getProfile()).listPackageVersions(
+                    ListPackageVersionsRequest.builder()
+                            .domain(configuration.getDomain())
+                            .domainOwner(configuration.getDomainOwner())
+                            .format(PackageFormat.MAVEN)
+                            .repository(configuration.getRepository())
+                            .namespace(packageSummary.namespace())
+                            .packageValue(packageSummary.packageValue())
+                            .status(PackageVersionStatus.UNLISTED)
+                            .build());
+
+            if (!listPackagesResponse.packages().isEmpty()) {
+                logger.info("Pruning unlisted versions for package: " + packageSummary.namespace() + ":" + packageSummary.packageValue());
+                DeletePackageVersionsResponse deletePackageVersionsResponse = getCodeArtifactClient(configuration.getProfile()).deletePackageVersions(
+                        DeletePackageVersionsRequest.builder()
+                                .domain(configuration.getDomain())
+                                .domainOwner(configuration.getDomainOwner())
+                                .format(PackageFormat.MAVEN)
+                                .repository(configuration.getRepository())
+                                .namespace(packageSummary.namespace())
+                                .packageValue(packageSummary.packageValue())
+                                .expectedStatus(PackageVersionStatus.UNLISTED)
+                                .versions(listPackageVersionsResponse.versions().stream().map(PackageVersionSummary::version).collect(Collectors.toList()))
+                                .build());
+            }
+        }
     }
 
     private String requireProperty(Properties properties, String propertyName) {

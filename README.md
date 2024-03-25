@@ -106,8 +106,9 @@ The following configuration parameters must be supplied:
 
 The following configuration parameters are optional:
 
-* codeartifact.durationSeconds [Default = 43200 (12 hours max)]
-* codeartifact.profile [Default = "codeartifact"]
+* codeartifact.durationSeconds [Default = 43200 (12 hours max)] - The time, in seconds, that the generated authorization token is valid. Valid values are 0 and any number between 900 (15 minutes) and 43200 (12 hours).
+* codeartifact.profile [Default = "codeartifact"] - The profile name to retrieve credentials from to authorize Codeartifact requests.
+* codeartifact.prune [Default = 'false] - If true, will prune unlisted versions from all packages in repository (to cut-down on repository size).
 
 ### Example Configuration
 
@@ -124,8 +125,15 @@ The following configuration parameters are optional:
 Codeartifact sometimes reports that it can't upload a checksum file. This is not our fault - it is a [known Codeartifact issue](https://repost.aws/questions/QUPTjhfj0cSYqEk7TgZJRKnw/maven-fails-to-upload-maven-metadata-xml-checksum).
 The recommended fix is to add Maven property `-Daether.checksums.algorithms=MD5` when deploying to the Codeartifact repository.
 
+## Publish New Release
+
+```shell
+./mvnw versions:set -DnewVersion=0.0.2
+mvn release:clean release:prepare
+mvn release:perform
+```
+
 ## TODO
 
 * Cache the repository endpoint and authorization token with its expiration timestamp so we only have to fetch them when
 necessary. The somewhat difficult question is...where to cache them? `target` directory seems unsafe, XDG_CACHE recommendations?
-* Release to Maven Central?
