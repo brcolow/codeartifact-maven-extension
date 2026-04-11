@@ -1,19 +1,40 @@
 ## Extension Purpose
 
-Automatically retrieves a CodeArtifact authentication token and uses it to properly configure your remote repository to
-use your Codeartifact repository.
+Automatically retrieves a CodeArtifact authorization token, discovers the repository endpoint, and configures Maven to
+use your CodeArtifact repository for dependency resolution and publishing.
 
-## Codeartifact Setup For Maven
+This exists because AWS's documented Maven flow still requires fetching and refreshing a temporary CodeArtifact auth
+token outside Maven.
 
-You need to create a Codeartifact repository and a domain that contains it. You can follow 
-[these instructions](https://docs.aws.amazon.com/codeartifact/latest/ug/create-repo.html#create-repo-console).
+## Compatibility
 
-You should also [add "maven-central-store" as an upstream repository](https://docs.aws.amazon.com/codeartifact/latest/ug/repo-upstream-add-console.html)
-if you did not already do so when creating your repository.
+This project builds against Maven 3.9.14 APIs and targets Java 11 bytecode. The included Maven Wrapper is also pinned
+to Maven 3.9.14.
+
+## Intended Behavior
+
+This extension is designed for the "CodeArtifact is the source of truth" workflow:
+
+* it discovers the configured CodeArtifact Maven repository endpoint
+* it fetches a fresh authorization token for that repository
+* it points dependency and plugin resolution at that repository
+* it configures a `central` mirror so Maven Central is reached through CodeArtifact
+
+If `codeartifact.prune=true` is enabled, the extension also deletes unlisted package versions from the configured
+repository after the Maven session finishes.
+
+## CodeArtifact Setup for Maven
+
+Create a CodeArtifact domain and a Maven repository inside it. AWS documents that flow here:
+
+* [Create a repository in CodeArtifact](https://docs.aws.amazon.com/codeartifact/latest/ug/create-repo.html#create-repo-console)
+* [Add an upstream repository](https://docs.aws.amazon.com/codeartifact/latest/ug/repo-upstream-add-console.html)
+
+If you want CodeArtifact to proxy Maven Central, add `maven-central-store` as an upstream repository.
 
 ## Add Extension to `pom.xml`
 
-You can add `codeartifact-maven-extension` to your projects `pom.xml` like so:
+Add the extension to your project:
 
 ```pom
 <build>
@@ -21,94 +42,49 @@ You can add `codeartifact-maven-extension` to your projects `pom.xml` like so:
     <extension>
       <groupId>io.github.brcolow</groupId>
       <artifactId>codeartifact-maven-extension</artifactId>
-      <version>0.0.1</version>
+      <version>0.0.3</version>
     </extension>
   </extensions>
-  <plugins>
-    < !-- etc. -->
-  </plugins>
 </build>
 ```
 
 ## AWS Authentication
 
-### Create New IAM User
+By default, the extension uses the AWS SDK for Java default credential chain.
 
-We recommend creating a new IAM User called "codeartifact-admin" and attach to it the AWS managed policy `AWSCodeArtifactAdminAccess`:
-
-```json
-{
-   "Version": "2012-10-17",
-   "Statement": [
-      {
-         "Action": [
-            "codeartifact:Describe*",
-            "codeartifact:Get*",
-            "codeartifact:List*",
-            "codeartifact:ReadFromRepository"
-         ],
-         "Effect": "Allow",
-         "Resource": "*"
-      },
-      {
-         "Effect": "Allow",
-         "Action": "sts:GetServiceBearerToken",
-         "Resource": "*",
-         "Condition": {
-            "StringEquals": {
-               "sts:AWSServiceName": "codeartifact.amazonaws.com"
-            }
-         }
-      }  
-   ]
-}
-```
-
-### Create New Credentials Profile
-
-Create a new profile in your AWS credentials file (defaults to: `~/.aws/credentials`):
-
-```
-[default]
-aws_access_key_id={YOUR_ACCESS_KEY_ID}
-aws_secret_access_key={YOUR_SECRET_ACCESS_KEY}
-
-[codeartifact]
-aws_access_key_id={CODEARTIFACT_ADMIN_ACCESS_KEY_ID}
-aws_secret_access_key={CODEARTIFACT_ADMIN_SECRET_ACCESS_KEY}
-```
-
-If this is your first time creating a non-default profile, you will only see the `default` profile. In the above example
-we added a new profile called `codeartifact` and set the access key and secret key from the IAM user creation step above.
-
-### Pass Profile Name to `codeartifact-maven-extension`
-
-Make sure the name of the profile you created above is passed to `codeartifact-maven-extension` if different from the default
-`codeartifact` name. For example, if you named the new profile `codeartifact_profile`, you would configure the extension like
-so:
+If you want to force a specific shared credentials profile for this extension, set `codeartifact.profile`:
 
 ```pom
 <properties>
-  <codeartifact.profile>codeartifact_profile</codeartifact.profile>
+  <codeartifact.profile>codeartifact</codeartifact.profile>
 </properties>
 ```
 
 ## Extension Configuration
 
-Unfortunately extensions cannot be configured like plugins (with a `<configuration>` element). Instead, the easiest way is
-to use the projects `<properties>` element.
+Extensions cannot use a plugin-style `<configuration>` block, so this extension is configured with project properties.
 
-The following configuration parameters must be supplied:
+Required properties:
 
-* codeartifact.domain
-* codeartifact.domainOwner
-* codeartifact.repository
+* `codeartifact.domain`
+* `codeartifact.domainOwner`
+* `codeartifact.repository`
 
-The following configuration parameters are optional:
+Optional properties:
 
-* codeartifact.durationSeconds [Default = 43200 (12 hours max)] - The time, in seconds, that the generated authorization token is valid. Valid values are 0 and any number between 900 (15 minutes) and 43200 (12 hours).
-* codeartifact.profile [Default = "codeartifact"] - The profile name to retrieve credentials from to authorize Codeartifact requests.
-* codeartifact.prune [Default = 'false] - If true, will prune unlisted versions from all packages in repository (to cut-down on repository size).
+* `codeartifact.durationSeconds`
+  Default: `43200`
+  Valid values: `0`, or any value from `900` to `43200`
+  `0` is primarily useful when you are using assumed-role credentials and want the token lifetime to track the
+  remaining session duration.
+* `codeartifact.profile`
+  Optional override for the shared AWS profile to use. If omitted, the AWS default credential chain is used.
+* `codeartifact.prune`
+  Default: `false`
+  If `true`, the extension deletes unlisted package versions from the configured CodeArtifact repository after the
+  Maven session ends.
+
+The extension fails fast when required properties are missing or when `codeartifact.durationSeconds` is invalid.
 
 ### Example Configuration
 
@@ -117,23 +93,31 @@ The following configuration parameters are optional:
   <codeartifact.domain>myDomain</codeartifact.domain>
   <codeartifact.domainOwner>123456789123</codeartifact.domainOwner>
   <codeartifact.repository>myRepo</codeartifact.repository>
+  <codeartifact.durationSeconds>3600</codeartifact.durationSeconds>
 </properties>
 ```
 
 ## Known Issues
 
-Codeartifact sometimes reports that it can't upload a checksum file. This is not our fault - it is a [known Codeartifact issue](https://repost.aws/questions/QUPTjhfj0cSYqEk7TgZJRKnw/maven-fails-to-upload-maven-metadata-xml-checksum).
-The recommended fix is to add Maven property `-Daether.checksums.algorithms=MD5` when deploying to the Codeartifact repository.
+CodeArtifact sometimes reports that it cannot upload a checksum file. This is a known CodeArtifact issue:
+
+* [Maven fails to upload maven-metadata.xml checksum](https://repost.aws/questions/QUPTjhfj0cSYqEk7TgZJRKnw/maven-fails-to-upload-maven-metadata-xml-checksum)
+
+The recommended workaround is to add Maven property `-Daether.checksums.algorithms=MD5` when deploying to the
+CodeArtifact repository.
+
+## Development
+
+Run the test suite with:
+
+```shell
+./mvnw test
+```
 
 ## Publish New Release
 
 ```shell
-./mvnw versions:set -DnewVersion=0.0.2
+./mvnw versions:set -DnewVersion=0.0.4
 ./mvnw release:clean release:prepare
 ./mvnw release:perform
 ```
-
-## TODO
-
-* Cache the repository endpoint and authorization token with its expiration timestamp so we only have to fetch them when
-necessary. The somewhat difficult question is...where to cache them? `target` directory seems unsafe, XDG_CACHE recommendations?
