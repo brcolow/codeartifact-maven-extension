@@ -5,7 +5,7 @@
 
     <groupId>io.github.brcolow</groupId>
     <artifactId>codeartifact-maven-extension</artifactId>
-    <version>0.0.3</version>
+    <version>0.0.4</version>
 
     <name>AWS CodeArtifact Maven Extension</name>
     <description>Automatically retrieves CodeArtifact authentication tokens and uses Codeartifact as your remote
@@ -38,7 +38,7 @@
         <connection>scm:git:git://github.com/brcolow/codeartifact-maven-extension.git</connection>
         <developerConnection>scm:git:https://github.com/brcolow/codeartifact-maven-extension.git</developerConnection>
         <url>http://github.com/brcolow/codeartifact-maven-extension/tree/master</url>
-        <tag>HEAD</tag>
+        <tag>codeartifact-maven-extension-0.0.4</tag>
     </scm>
 
     <issueManagement>
@@ -78,7 +78,7 @@
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>ssooidc</artifactId>
-            <version>2.42.32</version>         
+            <version>2.42.32</version>
             <scope>runtime</scope>
         </dependency>
         <dependency>
@@ -181,8 +181,7 @@
                 <version>0.10.0</version>
                 <extensions>true</extensions>
                 <configuration>
-                    <publishingServerId>central</publishingServerId>
-                    <tokenAuth>true</tokenAuth>
+                    <publishingServerId>maven-central-sonatype</publishingServerId>
                     <autoPublish>true</autoPublish>
                     <waitUntil>published</waitUntil>
                 </configuration>
