@@ -16,6 +16,7 @@
 
     <properties>
         <maven.compiler.release>11</maven.compiler.release>
+        <sisu.inject.version>1.0.0</sisu.inject.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
@@ -147,6 +148,23 @@
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.15.0</version>
+                <configuration>
+                    <annotationProcessors>
+                        <annotationProcessor>org.eclipse.sisu.space.SisuIndexAPT6</annotationProcessor>
+                    </annotationProcessors>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.eclipse.sisu</groupId>
+                            <artifactId>org.eclipse.sisu.inject</artifactId>
+                            <version>${sisu.inject.version}</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
