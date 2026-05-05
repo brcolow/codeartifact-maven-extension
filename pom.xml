@@ -5,7 +5,7 @@
 
     <groupId>io.github.brcolow</groupId>
     <artifactId>codeartifact-maven-extension</artifactId>
-    <version>0.0.5</version>
+    <version>0.0.6</version>
 
     <name>AWS CodeArtifact Maven Extension</name>
     <description>Automatically retrieves CodeArtifact authentication tokens and uses Codeartifact as your remote
@@ -39,7 +39,7 @@
         <connection>scm:git:git://github.com/brcolow/codeartifact-maven-extension.git</connection>
         <developerConnection>scm:git:https://github.com/brcolow/codeartifact-maven-extension.git</developerConnection>
         <url>http://github.com/brcolow/codeartifact-maven-extension/tree/master</url>
-        <tag>codeartifact-maven-extension-0.0.5</tag>
+        <tag>codeartifact-maven-extension-0.0.6</tag>
     </scm>
 
     <issueManagement>

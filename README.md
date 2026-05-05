@@ -46,7 +46,7 @@ Add the extension to your project:
     <extension>
       <groupId>io.github.brcolow</groupId>
       <artifactId>codeartifact-maven-extension</artifactId>
-      <version>0.0.5</version>
+      <version>0.0.6</version>
     </extension>
   </extensions>
 </build>
@@ -126,7 +126,7 @@ Run the test suite with:
 ## Publish New Release
 
 ```shell
-./mvnw versions:set -DnewVersion=0.0.5
+./mvnw versions:set -DnewVersion=0.0.6
 ./mvnw release:clean release:prepare
 ./mvnw release:perform
 ```
