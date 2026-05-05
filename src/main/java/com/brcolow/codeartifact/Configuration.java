@@ -6,14 +6,27 @@ public class Configuration {
     private final int durationSeconds;
     private final String repository;
     private final String profile;
+    private final boolean sourceOfTruth;
     private final boolean prune;
 
     public Configuration(String domain, String domainOwner, int durationSeconds, String repository, String profile, boolean prune) {
+        this(domain, domainOwner, durationSeconds, repository, profile, true, prune);
+    }
+
+    public Configuration(
+            String domain,
+            String domainOwner,
+            int durationSeconds,
+            String repository,
+            String profile,
+            boolean sourceOfTruth,
+            boolean prune) {
         this.domain = domain;
         this.domainOwner = domainOwner;
         this.durationSeconds = durationSeconds;
         this.repository = repository;
         this.profile = profile;
+        this.sourceOfTruth = sourceOfTruth;
         this.prune = prune;
     }
 
@@ -37,6 +50,10 @@ public class Configuration {
         return profile;
     }
 
+    public boolean isSourceOfTruth() {
+        return sourceOfTruth;
+    }
+
     public boolean isPrune() {
         return prune;
     }
@@ -49,6 +66,7 @@ public class Configuration {
                 ", durationSeconds=" + durationSeconds +
                 ", repository='" + repository + '\'' +
                 ", profile='" + profile + '\'' +
+                ", sourceOfTruth='" + sourceOfTruth + '\'' +
                 ", prune='" + prune + '\'' +
                 '}';
     }

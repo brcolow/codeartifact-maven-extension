@@ -56,6 +56,7 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
     static final String REPOSITORY_PROPERTY = "codeartifact.repository";
     static final String DURATION_PROPERTY = "codeartifact.durationSeconds";
     static final String PROFILE_PROPERTY = "codeartifact.profile";
+    static final String SOURCE_OF_TRUTH_PROPERTY = "codeartifact.sourceOfTruth";
     static final String PRUNE_PROPERTY = "codeartifact.prune";
     static final int DEFAULT_DURATION_SECONDS = 43200;
     static final int MIN_DURATION_SECONDS = 900;
@@ -81,17 +82,26 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
             throw new MavenExecutionException("Failed to configure the CodeArtifact repository.", ex);
         }
 
-        session.getCurrentProject().setRemoteArtifactRepositories(List.of(codeartifactRepository));
-        session.getCurrentProject().setPluginArtifactRepositories(List.of(codeartifactRepository));
+        if (configuration.isSourceOfTruth()) {
+            session.getCurrentProject().setRemoteArtifactRepositories(List.of(codeartifactRepository));
+            session.getCurrentProject().setPluginArtifactRepositories(List.of(codeartifactRepository));
+        } else {
+            session.getCurrentProject().setRemoteArtifactRepositories(addCodeartifactRepository(
+                    session.getCurrentProject().getRemoteArtifactRepositories(), codeartifactRepository));
+            session.getCurrentProject().setPluginArtifactRepositories(addCodeartifactRepository(
+                    session.getCurrentProject().getPluginArtifactRepositories(), codeartifactRepository));
+        }
 
         session.getCurrentProject().setSnapshotArtifactRepository(codeartifactRepository);
         session.getCurrentProject().setReleaseArtifactRepository(codeartifactRepository);
-        Mirror mavenCentralMirror = new Mirror();
-        mavenCentralMirror.setId("central-mirror");
-        mavenCentralMirror.setName("CodeArtifact Maven Central mirror");
-        mavenCentralMirror.setUrl(codeartifactRepository.getUrl());
-        mavenCentralMirror.setMirrorOf("central");
-        session.getRequest().setMirrors(List.of(mavenCentralMirror));
+        if (configuration.isSourceOfTruth()) {
+            Mirror mavenCentralMirror = new Mirror();
+            mavenCentralMirror.setId("central-mirror");
+            mavenCentralMirror.setName("CodeArtifact Maven Central mirror");
+            mavenCentralMirror.setUrl(codeartifactRepository.getUrl());
+            mavenCentralMirror.setMirrorOf("central");
+            session.getRequest().setMirrors(List.of(mavenCentralMirror));
+        }
     }
 
     @Override
@@ -113,8 +123,48 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         String repository = requireProperty(properties, REPOSITORY_PROPERTY);
         int durationSeconds = parseDurationSeconds(properties.getProperty(DURATION_PROPERTY));
         String profile = normalize(properties.getProperty(PROFILE_PROPERTY));
+        boolean sourceOfTruth = parseSourceOfTruth(properties.getProperty(SOURCE_OF_TRUTH_PROPERTY));
         boolean prune = Boolean.parseBoolean(properties.getProperty(PRUNE_PROPERTY, "false"));
-        return new Configuration(domain, domainOwner, durationSeconds, repository, profile, prune);
+        return new Configuration(domain, domainOwner, durationSeconds, repository, profile, sourceOfTruth, prune);
+    }
+
+    boolean parseSourceOfTruth(String sourceOfTruthValue) throws MavenExecutionException {
+        String rawSourceOfTruth = normalize(sourceOfTruthValue);
+        if (rawSourceOfTruth == null) {
+            return true;
+        }
+        if ("true".equalsIgnoreCase(rawSourceOfTruth)) {
+            return true;
+        }
+        if ("false".equalsIgnoreCase(rawSourceOfTruth)) {
+            return false;
+        }
+        throw new MavenExecutionException("\"" + SOURCE_OF_TRUTH_PROPERTY
+                + "\" must be \"true\" or \"false\" but was: \"" + rawSourceOfTruth + "\".", (Throwable) null);
+    }
+
+    List<ArtifactRepository> addCodeartifactRepository(
+            List<ArtifactRepository> repositories, ArtifactRepository codeartifactRepository) {
+        if (repositories == null || repositories.isEmpty()) {
+            return List.of(codeartifactRepository);
+        }
+
+        List<ArtifactRepository> configuredRepositories = new ArrayList<>(repositories.size() + 1);
+        boolean replaced = false;
+        for (ArtifactRepository repository : repositories) {
+            if (Objects.equals(repository.getId(), codeartifactRepository.getId())) {
+                if (!replaced) {
+                    configuredRepositories.add(codeartifactRepository);
+                    replaced = true;
+                }
+                continue;
+            }
+            configuredRepositories.add(repository);
+        }
+        if (!replaced) {
+            configuredRepositories.add(codeartifactRepository);
+        }
+        return configuredRepositories;
     }
 
     int parseDurationSeconds(String durationSecondsValue) throws MavenExecutionException {

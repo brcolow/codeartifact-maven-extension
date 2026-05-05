@@ -13,12 +13,16 @@ to Maven 3.9.14.
 
 ## Intended Behavior
 
-This extension is designed for the "CodeArtifact is the source of truth" workflow:
+By default, this extension uses the "CodeArtifact is the source of truth" workflow:
 
 * it discovers the configured CodeArtifact Maven repository endpoint
 * it fetches a fresh authorization token for that repository
 * it points dependency and plugin resolution at that repository
 * it configures a `central` mirror so Maven Central is reached through CodeArtifact
+
+Set `codeartifact.sourceOfTruth=false` if you want Maven Central and your other configured repositories to continue
+resolving directly. In that mode, the extension adds the authenticated CodeArtifact repository to the existing
+dependency and plugin repositories without configuring a Maven Central mirror.
 
 If `codeartifact.prune=true` is enabled, the extension also deletes unlisted package versions from the configured
 repository after the Maven session finishes.
@@ -79,12 +83,17 @@ Optional properties:
   remaining session duration.
 * `codeartifact.profile`
   Optional override for the shared AWS profile to use. If omitted, the AWS default credential chain is used.
+* `codeartifact.sourceOfTruth`
+  Default: `true`
+  If `false`, the extension keeps existing dependency and plugin repositories, adds the authenticated CodeArtifact
+  repository, and does not configure Maven Central to mirror through CodeArtifact.
 * `codeartifact.prune`
   Default: `false`
   If `true`, the extension deletes unlisted package versions from the configured CodeArtifact repository after the
   Maven session ends.
 
-The extension fails fast when required properties are missing or when `codeartifact.durationSeconds` is invalid.
+The extension fails fast when required properties are missing or when `codeartifact.durationSeconds` or
+`codeartifact.sourceOfTruth` is invalid.
 
 ### Example Configuration
 
