@@ -61,8 +61,13 @@ If you want to force a specific shared credentials profile for this extension, s
 ```pom
 <properties>
   <codeartifact.profile>codeartifact</codeartifact.profile>
+  <codeartifact.region>us-west-2</codeartifact.region>
 </properties>
 ```
+
+When a named profile does not have its own region, either set `codeartifact.region`, set `aws.region` or
+`AWS_REGION`, or configure a default profile region. The extension checks those in that order before falling back to
+the instance metadata region provider.
 
 ## Extension Configuration
 
@@ -83,6 +88,9 @@ Optional properties:
   remaining session duration.
 * `codeartifact.profile`
   Optional override for the shared AWS profile to use. If omitted, the AWS default credential chain is used.
+* `codeartifact.region`
+  Optional override for the AWS region to use for CodeArtifact. This is useful when the selected profile comes from
+  the shared credentials file and has no matching region entry in the shared config file.
 * `codeartifact.sourceOfTruth`
   Default: `true`
   If `false`, the extension keeps existing dependency and plugin repositories, adds the authenticated CodeArtifact
@@ -95,6 +103,12 @@ Optional properties:
 The extension fails fast when required properties are missing or when `codeartifact.durationSeconds` or
 `codeartifact.sourceOfTruth` is invalid.
 
+Project properties can be overridden with normal Maven `-D` properties. For example:
+
+```shell
+./mvnw -Dcodeartifact.profile=codeartifact -Dcodeartifact.region=us-west-2 test
+```
+
 ### Example Configuration
 
 ```pom
@@ -102,6 +116,8 @@ The extension fails fast when required properties are missing or when `codeartif
   <codeartifact.domain>myDomain</codeartifact.domain>
   <codeartifact.domainOwner>123456789123</codeartifact.domainOwner>
   <codeartifact.repository>myRepo</codeartifact.repository>
+  <codeartifact.profile>codeartifact</codeartifact.profile>
+  <codeartifact.region>us-west-2</codeartifact.region>
   <codeartifact.durationSeconds>3600</codeartifact.durationSeconds>
 </properties>
 ```

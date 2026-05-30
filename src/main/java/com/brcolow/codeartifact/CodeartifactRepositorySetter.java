@@ -56,6 +56,7 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
     static final String REPOSITORY_PROPERTY = "codeartifact.repository";
     static final String DURATION_PROPERTY = "codeartifact.durationSeconds";
     static final String PROFILE_PROPERTY = "codeartifact.profile";
+    static final String REGION_PROPERTY = "codeartifact.region";
     static final String SOURCE_OF_TRUTH_PROPERTY = "codeartifact.sourceOfTruth";
     static final String PRUNE_PROPERTY = "codeartifact.prune";
     static final int DEFAULT_DURATION_SECONDS = 43200;
@@ -73,7 +74,7 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
 
     @Override
     public void afterProjectsRead(final MavenSession session) throws MavenExecutionException {
-        configuration = loadConfiguration(session.getCurrentProject().getProperties());
+        configuration = loadConfiguration(effectiveProperties(session));
 
         ArtifactRepository codeartifactRepository;
         try {
@@ -123,9 +124,25 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         String repository = requireProperty(properties, REPOSITORY_PROPERTY);
         int durationSeconds = parseDurationSeconds(properties.getProperty(DURATION_PROPERTY));
         String profile = normalize(properties.getProperty(PROFILE_PROPERTY));
+        String region = normalize(properties.getProperty(REGION_PROPERTY));
         boolean sourceOfTruth = parseSourceOfTruth(properties.getProperty(SOURCE_OF_TRUTH_PROPERTY));
         boolean prune = Boolean.parseBoolean(properties.getProperty(PRUNE_PROPERTY, "false"));
-        return new Configuration(domain, domainOwner, durationSeconds, repository, profile, sourceOfTruth, prune);
+        return new Configuration(domain, domainOwner, durationSeconds, repository, profile, region, sourceOfTruth, prune);
+    }
+
+    Properties effectiveProperties(MavenSession session) {
+        return effectiveProperties(
+                session.getCurrentProject().getProperties(),
+                session.getSystemProperties(),
+                session.getUserProperties());
+    }
+
+    Properties effectiveProperties(Properties projectProperties, Properties systemProperties, Properties userProperties) {
+        Properties properties = new Properties();
+        properties.putAll(projectProperties);
+        properties.putAll(systemProperties);
+        properties.putAll(userProperties);
+        return properties;
     }
 
     boolean parseSourceOfTruth(String sourceOfTruthValue) throws MavenExecutionException {
@@ -256,15 +273,20 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
     }
 
     public ArtifactRepository getCodeartifactRepository(Configuration configuration) {
-        return getCodeartifactRepository(configuration.getProfile(), configuration.getDomain(),
+        return getCodeartifactRepository(configuration.getProfile(), configuration.getRegion(), configuration.getDomain(),
                 configuration.getDomainOwner(), configuration.getRepository(), configuration.getDurationSeconds());
     }
 
     public ArtifactRepository getCodeartifactRepository(
             String profile, String domain, String domainOwner, String repository, int durationSeconds) {
-        CodeartifactClient client = getCodeArtifactClient(profile);
+        return getCodeartifactRepository(profile, null, domain, domainOwner, repository, durationSeconds);
+    }
+
+    public ArtifactRepository getCodeartifactRepository(
+            String profile, String region, String domain, String domainOwner, String repository, int durationSeconds) {
+        CodeartifactClient client = getCodeArtifactClient(profile, region);
         CodeartifactCacheStore.CacheCoordinates cacheCoordinates = CodeartifactCacheStore.coordinates(
-                getCodeArtifactRegion(profile).id(), domain, domainOwner, repository, profile);
+                getCodeArtifactRegion(profile, region).id(), domain, domainOwner, repository, profile);
         CodeartifactCacheStore.CacheEntry cacheEntry = getOrRefreshCacheEntry(
                 client, cacheCoordinates, domain, domainOwner, repository, durationSeconds);
 
@@ -281,11 +303,18 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
     }
 
     CodeartifactClient getCodeArtifactClient(String profile) {
+        return getCodeArtifactClient(profile, null);
+    }
+
+    CodeartifactClient getCodeArtifactClient(String profile, String region) {
         String normalizedProfile = normalize(profile);
-        if (codeartifactClient == null || !Objects.equals(codeartifactClientProfile, normalizedProfile)) {
+        Region resolvedRegion = resolveRegion(normalizedProfile, normalize(region));
+        if (codeartifactClient == null
+                || !Objects.equals(codeartifactClientProfile, normalizedProfile)
+                || !Objects.equals(codeartifactClientRegion, resolvedRegion)) {
             closeCodeArtifactClient();
-            codeartifactClientRegion = resolveRegion(normalizedProfile);
-            codeartifactClient = createCodeArtifactClient(normalizedProfile, codeartifactClientRegion);
+            codeartifactClientRegion = resolvedRegion;
+            codeartifactClient = createCodeArtifactClient(normalizedProfile, resolvedRegion);
             codeartifactClientProfile = normalizedProfile;
         }
         return codeartifactClient;
@@ -305,6 +334,14 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
     }
 
     Region resolveRegion(String profile) {
+        return resolveRegion(profile, null);
+    }
+
+    Region resolveRegion(String profile, String region) {
+        String normalizedRegion = normalize(region);
+        if (normalizedRegion != null) {
+            return Region.of(normalizedRegion);
+        }
         return getRegionProvider(profile).getRegion();
     }
 
@@ -315,6 +352,7 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         return new AwsRegionProviderChain(
                 new SystemSettingsRegionProvider(),
                 new AwsProfileRegionProvider(ProfileFile::defaultProfileFile, profile),
+                new AwsProfileRegionProvider(ProfileFile::defaultProfileFile, "default"),
                 new InstanceProfileRegionProvider());
     }
 
@@ -355,7 +393,11 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
     }
 
     private Region getCodeArtifactRegion(String profile) {
-        getCodeArtifactClient(profile);
+        return getCodeArtifactRegion(profile, null);
+    }
+
+    private Region getCodeArtifactRegion(String profile, String region) {
+        getCodeArtifactClient(profile, region);
         return codeartifactClientRegion;
     }
 
