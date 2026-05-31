@@ -8,8 +8,8 @@ token outside Maven.
 
 ## Compatibility
 
-This project builds against Maven 3.9.14 APIs and targets Java 11 bytecode. The included Maven Wrapper is also pinned
-to Maven 3.9.14.
+This project builds against Maven 3.9.16 APIs and targets Java 11 bytecode. The included Maven Wrapper is also pinned
+to Maven 3.9.16.
 
 ## Intended Behavior
 
