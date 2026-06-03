@@ -17,6 +17,7 @@ By default, this extension uses the "CodeArtifact is the source of truth" workfl
 
 * it discovers the configured CodeArtifact Maven repository endpoint
 * it fetches a fresh authorization token for that repository
+* it caches the repository endpoint and authorization token until the token nears expiration
 * it points dependency and plugin resolution at that repository
 * it configures a `central` mirror so Maven Central is reached through CodeArtifact
 
@@ -109,13 +110,17 @@ Optional properties:
   Default: `true`
   If `false`, the extension keeps existing dependency and plugin repositories, adds the authenticated CodeArtifact
   repository, and does not configure Maven Central to mirror through CodeArtifact.
+* `codeartifact.cache.enabled`
+  Default: `true`
+  If `false`, the extension fetches the CodeArtifact repository endpoint and authorization token from AWS for each
+  Maven session and does not read from or write to its local token cache.
 * `codeartifact.prune`
   Default: `false`
   If `true`, the extension deletes unlisted package versions from the configured CodeArtifact repository after the
   Maven session ends.
 
 The extension fails fast when required properties are missing or when `codeartifact.durationSeconds` or
-`codeartifact.sourceOfTruth` is invalid.
+any boolean property is invalid.
 
 Project properties can be overridden with normal Maven `-D` properties. For example:
 
@@ -135,6 +140,23 @@ Project properties can be overridden with normal Maven `-D` properties. For exam
   <codeartifact.durationSeconds>3600</codeartifact.durationSeconds>
 </properties>
 ```
+
+## Token Cache
+
+By default, the extension caches the CodeArtifact repository endpoint and authorization token locally so repeated Maven
+commands do not need to call AWS until the token is close to expiration. The token is stored in the extension cache:
+
+* Windows: `%LOCALAPPDATA%\codeartifact-maven-extension\Cache`
+* macOS: `~/Library/Caches/codeartifact-maven-extension`
+* Linux: `$XDG_CACHE_HOME/codeartifact-maven-extension`, or `~/.cache/codeartifact-maven-extension` when
+  `XDG_CACHE_HOME` is not set
+
+On POSIX file systems, cache files are written with owner-only read/write permissions. On Windows, access is governed by
+the user's profile directory ACLs. Delete the cache directory to force the next Maven run to fetch a fresh endpoint and
+token.
+
+Set `codeartifact.cache.enabled=false` if you do not want the extension to store CodeArtifact authorization tokens on
+disk.
 
 ## Known Issues
 

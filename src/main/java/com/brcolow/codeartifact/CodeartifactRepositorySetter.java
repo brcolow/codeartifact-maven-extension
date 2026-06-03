@@ -63,6 +63,7 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
     static final String REGION_PROPERTY = "codeartifact.region";
     static final String SOURCE_OF_TRUTH_PROPERTY = "codeartifact.sourceOfTruth";
     static final String PRUNE_PROPERTY = "codeartifact.prune";
+    static final String CACHE_ENABLED_PROPERTY = "codeartifact.cache.enabled";
     static final int DEFAULT_DURATION_SECONDS = 43200;
     static final int MIN_DURATION_SECONDS = 900;
     static final int MAX_DURATION_SECONDS = 43200;
@@ -124,8 +125,10 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         String profile = normalize(properties.getProperty(PROFILE_PROPERTY));
         String region = normalize(properties.getProperty(REGION_PROPERTY));
         boolean sourceOfTruth = parseSourceOfTruth(properties.getProperty(SOURCE_OF_TRUTH_PROPERTY));
-        boolean prune = Boolean.parseBoolean(properties.getProperty(PRUNE_PROPERTY, "false"));
-        return new Configuration(domain, domainOwner, durationSeconds, repository, profile, region, sourceOfTruth, prune);
+        boolean prune = parseBooleanProperty(PRUNE_PROPERTY, properties.getProperty(PRUNE_PROPERTY), false);
+        boolean cacheEnabled = parseBooleanProperty(CACHE_ENABLED_PROPERTY, properties.getProperty(CACHE_ENABLED_PROPERTY), true);
+        return new Configuration(
+                domain, domainOwner, durationSeconds, repository, profile, region, sourceOfTruth, prune, cacheEnabled);
     }
 
     Properties effectiveProperties(MavenSession session) {
@@ -144,18 +147,23 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
     }
 
     boolean parseSourceOfTruth(String sourceOfTruthValue) throws MavenExecutionException {
-        String rawSourceOfTruth = normalize(sourceOfTruthValue);
-        if (rawSourceOfTruth == null) {
+        return parseBooleanProperty(SOURCE_OF_TRUTH_PROPERTY, sourceOfTruthValue, true);
+    }
+
+    boolean parseBooleanProperty(String propertyName, String propertyValue, boolean defaultValue)
+            throws MavenExecutionException {
+        String rawValue = normalize(propertyValue);
+        if (rawValue == null) {
+            return defaultValue;
+        }
+        if ("true".equalsIgnoreCase(rawValue)) {
             return true;
         }
-        if ("true".equalsIgnoreCase(rawSourceOfTruth)) {
-            return true;
-        }
-        if ("false".equalsIgnoreCase(rawSourceOfTruth)) {
+        if ("false".equalsIgnoreCase(rawValue)) {
             return false;
         }
-        throw new MavenExecutionException("\"" + SOURCE_OF_TRUTH_PROPERTY
-                + "\" must be \"true\" or \"false\" but was: \"" + rawSourceOfTruth + "\".", (Throwable) null);
+        throw new MavenExecutionException("\"" + propertyName
+                + "\" must be \"true\" or \"false\" but was: \"" + rawValue + "\".", (Throwable) null);
     }
 
     List<ArtifactRepository> addCodeartifactRepository(
@@ -327,21 +335,34 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
 
     ArtifactRepository getCodeartifactRepository(Configuration configuration) {
         return getCodeartifactRepository(configuration.getProfile(), configuration.getRegion(), configuration.getDomain(),
-                configuration.getDomainOwner(), configuration.getRepository(), configuration.getDurationSeconds());
+                configuration.getDomainOwner(), configuration.getRepository(), configuration.getDurationSeconds(),
+                configuration.isCacheEnabled());
     }
 
     ArtifactRepository getCodeartifactRepository(
             String profile, String domain, String domainOwner, String repository, int durationSeconds) {
-        return getCodeartifactRepository(profile, null, domain, domainOwner, repository, durationSeconds);
+        return getCodeartifactRepository(profile, null, domain, domainOwner, repository, durationSeconds, true);
     }
 
     ArtifactRepository getCodeartifactRepository(
             String profile, String region, String domain, String domainOwner, String repository, int durationSeconds) {
+        return getCodeartifactRepository(profile, region, domain, domainOwner, repository, durationSeconds, true);
+    }
+
+    ArtifactRepository getCodeartifactRepository(
+            String profile,
+            String region,
+            String domain,
+            String domainOwner,
+            String repository,
+            int durationSeconds,
+            boolean cacheEnabled) {
         CodeartifactClient client = getCodeArtifactClient(profile, region);
         CodeartifactCacheStore.CacheCoordinates cacheCoordinates = CodeartifactCacheStore.coordinates(
                 getCodeArtifactRegion(profile, region).id(), domain, domainOwner, repository, profile);
-        CodeartifactCacheStore.CacheEntry cacheEntry = getOrRefreshCacheEntry(
-                client, cacheCoordinates, domain, domainOwner, repository, durationSeconds);
+        CodeartifactCacheStore.CacheEntry cacheEntry = cacheEnabled
+                ? getOrRefreshCacheEntry(client, cacheCoordinates, domain, domainOwner, repository, durationSeconds)
+                : fetchUncachedEntry(client, cacheCoordinates, domain, domainOwner, repository, durationSeconds);
 
         ArtifactRepository codeartifact = new MavenArtifactRepository("codeartifact",
                 cacheEntry.repositoryEndpoint(), new DefaultRepositoryLayout(),
@@ -493,6 +514,35 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         }
 
         return refreshCacheEntry(client, cacheCoordinates, domain, domainOwner, repository, durationSeconds);
+    }
+
+    private CodeartifactCacheStore.CacheEntry fetchUncachedEntry(
+            CodeartifactClient client,
+            CodeartifactCacheStore.CacheCoordinates cacheCoordinates,
+            String domain,
+            String domainOwner,
+            String repository,
+            int durationSeconds) {
+        GetRepositoryEndpointResponse getRepositoryEndpointResponse = client.getRepositoryEndpoint(
+                GetRepositoryEndpointRequest.builder()
+                        .domain(domain)
+                        .domainOwner(domainOwner)
+                        .format(PackageFormat.MAVEN)
+                        .repository(repository)
+                        .build());
+        GetAuthorizationTokenResponse getAuthorizationTokenResponse = client.getAuthorizationToken(
+                GetAuthorizationTokenRequest.builder()
+                        .domain(domain)
+                        .domainOwner(domainOwner)
+                        .durationSeconds((long) durationSeconds)
+                        .build());
+        logger.info("Fetched uncached CodeArtifact repository endpoint and authorization token");
+        return CodeartifactCacheStore.CacheEntry.empty(cacheCoordinates)
+                .withRepositoryEndpoint(getRepositoryEndpointResponse.repositoryEndpoint(), Instant.now(getCacheStoreClock()))
+                .withAuthorizationToken(
+                        getAuthorizationTokenResponse.authorizationToken(),
+                        resolveTokenExpiration(getAuthorizationTokenResponse, durationSeconds),
+                        Instant.now(getCacheStoreClock()));
     }
 
     private CodeartifactCacheStore.CacheEntry refreshCacheEntry(
