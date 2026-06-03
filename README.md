@@ -1,4 +1,4 @@
-## Extension Purpose
+﻿## Extension Purpose
 
 Automatically retrieves a CodeArtifact authorization token, discovers the repository endpoint, and configures Maven to
 use your CodeArtifact repository for dependency resolution and publishing.
@@ -48,7 +48,7 @@ Create or update `.mvn/extensions.xml` in your project:
   <extension>
     <groupId>io.github.brcolow</groupId>
     <artifactId>codeartifact-maven-extension</artifactId>
-    <version>0.0.7</version>
+    <version>0.0.8</version>
   </extension>
 </extensions>
 ```
@@ -61,7 +61,7 @@ You can also add it as a build extension in `pom.xml`:
     <extension>
       <groupId>io.github.brcolow</groupId>
       <artifactId>codeartifact-maven-extension</artifactId>
-      <version>0.0.7</version>
+      <version>0.0.8</version>
     </extension>
   </extensions>
 </build>
@@ -241,3 +241,4 @@ The `release` profile attaches sources and Javadocs, signs artifacts, and enable
 ./mvnw release:clean release:prepare
 ./mvnw release:perform
 ```
+

@@ -1,11 +1,11 @@
-<?xml version="1.0" encoding="UTF-8"?>
+﻿<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>io.github.brcolow</groupId>
     <artifactId>codeartifact-maven-extension</artifactId>
-    <version>0.0.7</version>
+    <version>0.0.8</version>
 
     <name>AWS CodeArtifact Maven Extension</name>
     <description>Automatically retrieves CodeArtifact authentication tokens and uses CodeArtifact as your remote
@@ -40,7 +40,7 @@
         <connection>scm:git:git://github.com/brcolow/codeartifact-maven-extension.git</connection>
         <developerConnection>scm:git:https://github.com/brcolow/codeartifact-maven-extension.git</developerConnection>
         <url>http://github.com/brcolow/codeartifact-maven-extension/tree/master</url>
-        <tag>codeartifact-maven-extension-0.0.7</tag>
+        <tag>codeartifact-maven-extension-0.0.8</tag>
     </scm>
 
     <issueManagement>
@@ -220,3 +220,4 @@
         </plugins>
     </build>
 </project>
+
