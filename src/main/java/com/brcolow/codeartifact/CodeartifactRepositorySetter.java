@@ -279,7 +279,7 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
             logger.info("Pruning {} unlisted version(s) for package: {}:{}",
                     unlistedVersions.size(), packageSummary.namespace(), packageSummary.packageValue());
             for (List<String> versionBatch : partition(unlistedVersions, DELETE_BATCH_SIZE)) {
-                getCodeArtifactClient(configuration.getProfile()).deletePackageVersions(
+                getCodeArtifactClient(configuration).deletePackageVersions(
                         DeletePackageVersionsRequest.builder()
                                 .domain(configuration.getDomain())
                                 .domainOwner(configuration.getDomainOwner())
@@ -298,7 +298,7 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         List<PackageSummary> packages = new ArrayList<>();
         String nextToken = null;
         do {
-            ListPackagesResponse response = getCodeArtifactClient(configuration.getProfile()).listPackages(
+            ListPackagesResponse response = getCodeArtifactClient(configuration).listPackages(
                     ListPackagesRequest.builder()
                             .domain(configuration.getDomain())
                             .domainOwner(configuration.getDomainOwner())
@@ -316,7 +316,7 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         List<String> versions = new ArrayList<>();
         String nextToken = null;
         do {
-            ListPackageVersionsResponse response = getCodeArtifactClient(configuration.getProfile()).listPackageVersions(
+            ListPackageVersionsResponse response = getCodeArtifactClient(configuration).listPackageVersions(
                     ListPackageVersionsRequest.builder()
                             .domain(configuration.getDomain())
                             .domainOwner(configuration.getDomainOwner())
@@ -378,6 +378,12 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
 
     CodeartifactClient getCodeArtifactClient(String profile) {
         return getCodeArtifactClient(profile, null);
+    }
+
+    CodeartifactClient getCodeArtifactClient(Configuration configuration) {
+        return configuration.getRegion() == null
+                ? getCodeArtifactClient(configuration.getProfile())
+                : getCodeArtifactClient(configuration.getProfile(), configuration.getRegion());
     }
 
     CodeartifactClient getCodeArtifactClient(String profile, String region) {

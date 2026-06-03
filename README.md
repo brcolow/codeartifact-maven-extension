@@ -67,6 +67,16 @@ You can also add it as a build extension in `pom.xml`:
 </build>
 ```
 
+### Bootstrap Caveat
+
+Maven loads `.mvn/extensions.xml` as a
+[core extension descriptor](https://maven.apache.org/guides/mini/guide-using-extensions.html) before this extension can
+configure project repositories. That means the extension artifact itself must already be resolvable through Maven's
+normal bootstrap resolution path, such as Maven Central, your local repository, or repositories/mirrors configured in
+`settings.xml`. Because this extension is published to Maven Central, most projects do not need extra setup. Private
+forks or unpublished versions should be installed locally or made available through `settings.xml`; the extension cannot
+use CodeArtifact to download itself on the first run.
+
 ## AWS Authentication
 
 By default, the extension uses the AWS SDK for Java default credential chain.
@@ -83,6 +93,53 @@ If you want to force a specific shared credentials profile for this extension, s
 When a named profile does not have its own region, either set `codeartifact.region`, set `aws.region` or
 `AWS_REGION`, or configure a default profile region. The extension checks those in that order before falling back to
 the instance metadata region provider.
+
+## IAM Permissions
+
+Normal dependency and plugin resolution requires permission to fetch a CodeArtifact token, discover the repository
+endpoint, and read from the repository:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "codeartifact:GetAuthorizationToken",
+      "Resource": "arn:aws:codeartifact:${region}:${account}:domain/${domain}"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "codeartifact:GetRepositoryEndpoint",
+        "codeartifact:ReadFromRepository"
+      ],
+      "Resource": "arn:aws:codeartifact:${region}:${account}:repository/${domain}/${repository}"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "sts:GetServiceBearerToken",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "sts:AWSServiceName": "codeartifact.amazonaws.com"
+        }
+      }
+    }
+  ]
+}
+```
+
+If Maven deploys packages to CodeArtifact, also grant `codeartifact:PublishPackageVersion` and
+`codeartifact:PutPackageMetadata` on the package resources being published.
+
+If `codeartifact.prune=true` is enabled, also grant `codeartifact:ListPackages`,
+`codeartifact:ListPackageVersions`, and `codeartifact:DeletePackageVersions`. The delete permission should be scoped as
+narrowly as possible because prune deletes package versions with `UNLISTED` status.
+
+See AWS's [CodeArtifact authentication docs](https://docs.aws.amazon.com/codeartifact/latest/ug/tokens-authentication.html)
+and [permissions reference](https://docs.aws.amazon.com/codeartifact/latest/ug/auth-and-access-control-permissions-reference.html)
+for the authoritative action and resource mapping.
 
 ## Extension Configuration
 
