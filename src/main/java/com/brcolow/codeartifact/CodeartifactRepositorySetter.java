@@ -16,6 +16,7 @@ import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider;
 import software.amazon.awssdk.core.exception.SdkException;
+import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.profiles.ProfileFile;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.regions.providers.AwsProfileRegionProvider;
@@ -403,6 +404,7 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
     CodeartifactClient createCodeArtifactClient(String profile, Region region) {
         return CodeartifactClient.builder()
                 .credentialsProvider(getCredentialsProvider(profile))
+                .httpClientBuilder(UrlConnectionHttpClient.builder())
                 .region(region)
                 .build();
     }
