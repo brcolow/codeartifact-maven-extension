@@ -8,6 +8,7 @@ import org.apache.maven.artifact.repository.Authentication;
 import org.apache.maven.artifact.repository.MavenArtifactRepository;
 import org.apache.maven.artifact.repository.layout.DefaultRepositoryLayout;
 import org.apache.maven.execution.MavenSession;
+import org.apache.maven.project.MavenProject;
 import org.apache.maven.settings.Mirror;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,8 +49,11 @@ import java.util.Objects;
 import java.util.Properties;
 import java.util.stream.Collectors;
 
+/**
+ * Maven lifecycle participant that configures project repositories for AWS CodeArtifact.
+ */
 @Named
-@SuppressWarnings("unused")
+@SuppressWarnings({"deprecation", "unused"})
 public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticipant {
     static final String DOMAIN_PROPERTY = "codeartifact.domain";
     static final String DOMAIN_OWNER_PROPERTY = "codeartifact.domainOwner";
@@ -72,6 +76,12 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
     private CodeartifactCacheStore cacheStore;
     private Configuration configuration;
 
+    /**
+     * Creates the CodeArtifact repository lifecycle participant.
+     */
+    public CodeartifactRepositorySetter() {
+    }
+
     @Override
     public void afterProjectsRead(final MavenSession session) throws MavenExecutionException {
         configuration = loadConfiguration(effectiveProperties(session));
@@ -83,38 +93,26 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
             throw new MavenExecutionException("Failed to configure the CodeArtifact repository.", ex);
         }
 
-        if (configuration.isSourceOfTruth()) {
-            session.getCurrentProject().setRemoteArtifactRepositories(List.of(codeartifactRepository));
-            session.getCurrentProject().setPluginArtifactRepositories(List.of(codeartifactRepository));
-        } else {
-            session.getCurrentProject().setRemoteArtifactRepositories(addCodeartifactRepository(
-                    session.getCurrentProject().getRemoteArtifactRepositories(), codeartifactRepository));
-            session.getCurrentProject().setPluginArtifactRepositories(addCodeartifactRepository(
-                    session.getCurrentProject().getPluginArtifactRepositories(), codeartifactRepository));
+        for (MavenProject project : session.getProjects()) {
+            configureProjectRepositories(project, codeartifactRepository, configuration);
         }
 
-        session.getCurrentProject().setSnapshotArtifactRepository(codeartifactRepository);
-        session.getCurrentProject().setReleaseArtifactRepository(codeartifactRepository);
         if (configuration.isSourceOfTruth()) {
-            Mirror mavenCentralMirror = new Mirror();
-            mavenCentralMirror.setId("central-mirror");
-            mavenCentralMirror.setName("CodeArtifact Maven Central mirror");
-            mavenCentralMirror.setUrl(codeartifactRepository.getUrl());
-            mavenCentralMirror.setMirrorOf("central");
-            session.getRequest().setMirrors(List.of(mavenCentralMirror));
+            session.getRequest().setMirrors(addOrReplaceMavenCentralMirror(
+                    session.getRequest().getMirrors(), codeartifactRepository));
         }
     }
 
     @Override
     public void afterSessionEnd(MavenSession session) throws MavenExecutionException {
-        if (configuration == null || !configuration.isPrune()) {
-            return;
-        }
-
         try {
-            pruneUnlistedVersions(configuration);
+            if (configuration != null && configuration.isPrune()) {
+                pruneUnlistedVersions(configuration);
+            }
         } catch (SdkException ex) {
             throw new MavenExecutionException("Failed to prune unlisted CodeArtifact package versions.", ex);
+        } finally {
+            closeCodeArtifactClient();
         }
     }
 
@@ -182,6 +180,61 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
             configuredRepositories.add(codeartifactRepository);
         }
         return configuredRepositories;
+    }
+
+    void configureProjectRepositories(
+            MavenProject project, ArtifactRepository codeartifactRepository, Configuration configuration) {
+        if (configuration.isSourceOfTruth()) {
+            project.setRemoteArtifactRepositories(List.of(codeartifactRepository));
+            project.setPluginArtifactRepositories(List.of(codeartifactRepository));
+        } else {
+            project.setRemoteArtifactRepositories(addCodeartifactRepository(
+                    project.getRemoteArtifactRepositories(), codeartifactRepository));
+            project.setPluginArtifactRepositories(addCodeartifactRepository(
+                    project.getPluginArtifactRepositories(), codeartifactRepository));
+        }
+
+        project.setSnapshotArtifactRepository(codeartifactRepository);
+        project.setReleaseArtifactRepository(codeartifactRepository);
+    }
+
+    List<Mirror> addOrReplaceMavenCentralMirror(List<Mirror> mirrors, ArtifactRepository codeartifactRepository) {
+        Mirror codeartifactMirror = mavenCentralMirror(codeartifactRepository);
+        if (mirrors == null || mirrors.isEmpty()) {
+            return List.of(codeartifactMirror);
+        }
+
+        List<Mirror> configuredMirrors = new ArrayList<>(mirrors.size() + 1);
+        boolean replaced = false;
+        for (Mirror mirror : mirrors) {
+            if (isMavenCentralMirror(mirror)) {
+                if (!replaced) {
+                    configuredMirrors.add(codeartifactMirror);
+                    replaced = true;
+                }
+                continue;
+            }
+            configuredMirrors.add(mirror);
+        }
+        if (!replaced) {
+            configuredMirrors.add(codeartifactMirror);
+        }
+        return configuredMirrors;
+    }
+
+    private Mirror mavenCentralMirror(ArtifactRepository codeartifactRepository) {
+        Mirror mavenCentralMirror = new Mirror();
+        mavenCentralMirror.setId("central-mirror");
+        mavenCentralMirror.setName("CodeArtifact Maven Central mirror");
+        mavenCentralMirror.setUrl(codeartifactRepository.getUrl());
+        mavenCentralMirror.setMirrorOf("central");
+        return mavenCentralMirror;
+    }
+
+    private boolean isMavenCentralMirror(Mirror mirror) {
+        return mirror != null
+                && (Objects.equals(mirror.getId(), "central-mirror")
+                || Objects.equals(mirror.getMirrorOf(), "central"));
     }
 
     int parseDurationSeconds(String durationSecondsValue) throws MavenExecutionException {
@@ -272,17 +325,17 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         return versions;
     }
 
-    public ArtifactRepository getCodeartifactRepository(Configuration configuration) {
+    ArtifactRepository getCodeartifactRepository(Configuration configuration) {
         return getCodeartifactRepository(configuration.getProfile(), configuration.getRegion(), configuration.getDomain(),
                 configuration.getDomainOwner(), configuration.getRepository(), configuration.getDurationSeconds());
     }
 
-    public ArtifactRepository getCodeartifactRepository(
+    ArtifactRepository getCodeartifactRepository(
             String profile, String domain, String domainOwner, String repository, int durationSeconds) {
         return getCodeartifactRepository(profile, null, domain, domainOwner, repository, durationSeconds);
     }
 
-    public ArtifactRepository getCodeartifactRepository(
+    ArtifactRepository getCodeartifactRepository(
             String profile, String region, String domain, String domainOwner, String repository, int durationSeconds) {
         CodeartifactClient client = getCodeArtifactClient(profile, region);
         CodeartifactCacheStore.CacheCoordinates cacheCoordinates = CodeartifactCacheStore.coordinates(

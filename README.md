@@ -36,9 +36,23 @@ Create a CodeArtifact domain and a Maven repository inside it. AWS documents tha
 
 If you want CodeArtifact to proxy Maven Central, add `maven-central-store` as an upstream repository.
 
-## Add Extension to `pom.xml`
+## Add Extension
 
-Add the extension to your project:
+Create or update `.mvn/extensions.xml` in your project:
+
+```xml
+<extensions xmlns="http://maven.apache.org/EXTENSIONS/1.1.0"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="http://maven.apache.org/EXTENSIONS/1.1.0 https://maven.apache.org/xsd/core-extensions-1.1.0.xsd">
+  <extension>
+    <groupId>io.github.brcolow</groupId>
+    <artifactId>codeartifact-maven-extension</artifactId>
+    <version>0.0.7</version>
+  </extension>
+</extensions>
+```
+
+You can also add it as a build extension in `pom.xml`:
 
 ```pom
 <build>
@@ -141,8 +155,10 @@ Run the test suite with:
 
 ## Publish New Release
 
+The `release` profile attaches sources and Javadocs, signs artifacts, and enables Maven Central publishing.
+
 ```shell
-./mvnw versions:set -DnewVersion=0.0.7
+./mvnw versions:set -DnewVersion=<version>
 ./mvnw release:clean release:prepare
 ./mvnw release:perform
 ```

@@ -1,6 +1,6 @@
 package com.brcolow.codeartifact;
 
-public class Configuration {
+final class Configuration {
     private final String domain;
     private final String domainOwner;
     private final int durationSeconds;
@@ -10,11 +10,11 @@ public class Configuration {
     private final boolean sourceOfTruth;
     private final boolean prune;
 
-    public Configuration(String domain, String domainOwner, int durationSeconds, String repository, String profile, boolean prune) {
+    Configuration(String domain, String domainOwner, int durationSeconds, String repository, String profile, boolean prune) {
         this(domain, domainOwner, durationSeconds, repository, profile, null, true, prune);
     }
 
-    public Configuration(
+    Configuration(
             String domain,
             String domainOwner,
             int durationSeconds,
@@ -25,7 +25,7 @@ public class Configuration {
         this(domain, domainOwner, durationSeconds, repository, profile, null, sourceOfTruth, prune);
     }
 
-    public Configuration(
+    Configuration(
             String domain,
             String domainOwner,
             int durationSeconds,
@@ -44,35 +44,35 @@ public class Configuration {
         this.prune = prune;
     }
 
-    public String getDomain() {
+    String getDomain() {
         return domain;
     }
 
-    public String getDomainOwner() {
+    String getDomainOwner() {
         return domainOwner;
     }
 
-    public int getDurationSeconds() {
+    int getDurationSeconds() {
         return durationSeconds;
     }
 
-    public String getRepository() {
+    String getRepository() {
         return repository;
     }
 
-    public String getProfile() {
+    String getProfile() {
         return profile;
     }
 
-    public String getRegion() {
+    String getRegion() {
         return region;
     }
 
-    public boolean isSourceOfTruth() {
+    boolean isSourceOfTruth() {
         return sourceOfTruth;
     }
 
-    public boolean isPrune() {
+    boolean isPrune() {
         return prune;
     }
 
