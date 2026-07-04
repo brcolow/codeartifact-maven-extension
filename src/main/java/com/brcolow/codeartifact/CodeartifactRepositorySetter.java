@@ -7,9 +7,17 @@ import org.apache.maven.artifact.repository.ArtifactRepositoryPolicy;
 import org.apache.maven.artifact.repository.Authentication;
 import org.apache.maven.artifact.repository.MavenArtifactRepository;
 import org.apache.maven.artifact.repository.layout.DefaultRepositoryLayout;
+import org.apache.maven.execution.MavenExecutionRequest;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.settings.Mirror;
+import org.apache.maven.settings.Server;
+import org.eclipse.aether.DefaultRepositorySystemSession;
+import org.eclipse.aether.RepositorySystemSession;
+import org.eclipse.aether.repository.AuthenticationSelector;
+import org.eclipse.aether.repository.MirrorSelector;
+import org.eclipse.aether.repository.RemoteRepository;
+import org.eclipse.aether.util.repository.AuthenticationBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
@@ -42,12 +50,15 @@ import software.amazon.awssdk.services.codeartifact.model.PackageVersionSummary;
 
 import javax.inject.Named;
 import java.io.IOException;
+import java.lang.reflect.Field;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Properties;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
@@ -65,6 +76,8 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
     static final String SOURCE_OF_TRUTH_PROPERTY = "codeartifact.sourceOfTruth";
     static final String PRUNE_PROPERTY = "codeartifact.prune";
     static final String CACHE_ENABLED_PROPERTY = "codeartifact.cache.enabled";
+    static final String CODEARTIFACT_REPOSITORY_ID = "codeartifact";
+    static final String MAVEN_CENTRAL_MIRROR_ID = "central-mirror";
     static final int DEFAULT_DURATION_SECONDS = 43200;
     static final int MIN_DURATION_SECONDS = 900;
     static final int MAX_DURATION_SECONDS = 43200;
@@ -94,6 +107,9 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         } catch (SdkException ex) {
             throw new MavenExecutionException("Failed to configure the CodeArtifact repository.", ex);
         }
+
+        configureExecutionRequestRepositories(session.getRequest(), codeartifactRepository, configuration);
+        configureRepositorySessionAuthentication(session, codeartifactRepository, configuration);
 
         for (MavenProject project : session.getProjects()) {
             configureProjectRepositories(project, codeartifactRepository, configuration);
@@ -207,6 +223,79 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         project.setReleaseArtifactRepository(codeartifactRepository);
     }
 
+    void configureExecutionRequestRepositories(
+            MavenExecutionRequest request, ArtifactRepository codeartifactRepository, Configuration configuration) {
+        if (request == null) {
+            return;
+        }
+
+        if (configuration.isSourceOfTruth()) {
+            request.setRemoteRepositories(List.of(codeartifactRepository));
+            request.setPluginArtifactRepositories(List.of(codeartifactRepository));
+        } else {
+            request.setRemoteRepositories(addCodeartifactRepository(
+                    request.getRemoteRepositories(), codeartifactRepository));
+            request.setPluginArtifactRepositories(addCodeartifactRepository(
+                    request.getPluginArtifactRepositories(), codeartifactRepository));
+        }
+
+        request.setServers(addOrReplaceCodeartifactServers(
+                request.getServers(), codeartifactRepository.getAuthentication(), configuration));
+    }
+
+    List<Server> addOrReplaceCodeartifactServers(
+            List<Server> servers, Authentication authentication, Configuration configuration) {
+        if (authentication == null) {
+            return servers == null ? List.of() : new ArrayList<>(servers);
+        }
+
+        Set<String> serverIds = new LinkedHashSet<>();
+        serverIds.add(CODEARTIFACT_REPOSITORY_ID);
+        if (configuration.isSourceOfTruth()) {
+            serverIds.add(MAVEN_CENTRAL_MIRROR_ID);
+        }
+
+        List<Server> configuredServers = new ArrayList<>(
+                (servers == null ? 0 : servers.size()) + serverIds.size());
+        if (servers != null) {
+            for (Server server : servers) {
+                if (server != null && serverIds.remove(server.getId())) {
+                    configuredServers.add(codeartifactServer(server.getId(), authentication));
+                    continue;
+                }
+                configuredServers.add(server);
+            }
+        }
+        for (String serverId : serverIds) {
+            configuredServers.add(codeartifactServer(serverId, authentication));
+        }
+        return configuredServers;
+    }
+
+    void configureRepositorySessionAuthentication(
+            MavenSession session, ArtifactRepository codeartifactRepository, Configuration configuration) {
+        RepositorySystemSession repositorySession = session.getRepositorySession();
+        Authentication authentication = codeartifactRepository.getAuthentication();
+        if (repositorySession == null || authentication == null) {
+            return;
+        }
+
+        org.eclipse.aether.repository.Authentication resolverAuthentication = resolverAuthentication(authentication);
+        AuthenticationSelector authenticationSelector = new CodeartifactAuthenticationSelector(
+                repositorySession.getAuthenticationSelector(),
+                resolverAuthentication,
+                codeartifactRepository.getUrl(),
+                codeartifactRepositoryIds(configuration));
+        DefaultRepositorySystemSession configuredSession = new DefaultRepositorySystemSession(repositorySession);
+        configuredSession.setAuthenticationSelector(authenticationSelector);
+        if (configuration.isSourceOfTruth()) {
+            configuredSession.setMirrorSelector(new CodeartifactMirrorSelector(
+                    repositorySession.getMirrorSelector(), resolverAuthentication, codeartifactRepository.getUrl()));
+        }
+        configuredSession.setReadOnly();
+        replaceRepositorySession(session, configuredSession);
+    }
+
     List<Mirror> addOrReplaceMavenCentralMirror(List<Mirror> mirrors, ArtifactRepository codeartifactRepository) {
         Mirror codeartifactMirror = mavenCentralMirror(codeartifactRepository);
         if (mirrors == null || mirrors.isEmpty()) {
@@ -233,7 +322,7 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
 
     private Mirror mavenCentralMirror(ArtifactRepository codeartifactRepository) {
         Mirror mavenCentralMirror = new Mirror();
-        mavenCentralMirror.setId("central-mirror");
+        mavenCentralMirror.setId(MAVEN_CENTRAL_MIRROR_ID);
         mavenCentralMirror.setName("CodeArtifact Maven Central mirror");
         mavenCentralMirror.setUrl(codeartifactRepository.getUrl());
         mavenCentralMirror.setMirrorOf("central");
@@ -242,8 +331,43 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
 
     private boolean isMavenCentralMirror(Mirror mirror) {
         return mirror != null
-                && (Objects.equals(mirror.getId(), "central-mirror")
+                && (Objects.equals(mirror.getId(), MAVEN_CENTRAL_MIRROR_ID)
                 || Objects.equals(mirror.getMirrorOf(), "central"));
+    }
+
+    private Server codeartifactServer(String id, Authentication authentication) {
+        Server server = new Server();
+        server.setId(id);
+        server.setUsername(authentication.getUsername());
+        server.setPassword(authentication.getPassword());
+        return server;
+    }
+
+    private List<String> codeartifactRepositoryIds(Configuration configuration) {
+        List<String> repositoryIds = new ArrayList<>();
+        repositoryIds.add(CODEARTIFACT_REPOSITORY_ID);
+        if (configuration.isSourceOfTruth()) {
+            repositoryIds.add(MAVEN_CENTRAL_MIRROR_ID);
+        }
+        return repositoryIds;
+    }
+
+    private org.eclipse.aether.repository.Authentication resolverAuthentication(Authentication authentication) {
+        return new AuthenticationBuilder()
+                .addUsername(authentication.getUsername())
+                .addPassword(authentication.getPassword())
+                .build();
+    }
+
+    private void replaceRepositorySession(MavenSession session, RepositorySystemSession repositorySession) {
+        try {
+            Field repositorySessionField = MavenSession.class.getDeclaredField("repositorySession");
+            repositorySessionField.setAccessible(true);
+            repositorySessionField.set(session, repositorySession);
+        } catch (ReflectiveOperationException | RuntimeException ex) {
+            logger.warn("Failed to wire CodeArtifact authentication into the Maven repository session. "
+                    + "Project and execution-request repositories remain configured.", ex);
+        }
     }
 
     int parseDurationSeconds(String durationSecondsValue) throws MavenExecutionException {
@@ -658,5 +782,61 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         }
         int effectiveDurationSeconds = durationSeconds == 0 ? DEFAULT_DURATION_SECONDS : durationSeconds;
         return Instant.now(getCacheStoreClock()).plusSeconds(effectiveDurationSeconds);
+    }
+
+    private static final class CodeartifactAuthenticationSelector implements AuthenticationSelector {
+        private final AuthenticationSelector delegate;
+        private final org.eclipse.aether.repository.Authentication authentication;
+        private final String codeartifactRepositoryUrl;
+        private final List<String> repositoryIds;
+
+        private CodeartifactAuthenticationSelector(
+                AuthenticationSelector delegate,
+                org.eclipse.aether.repository.Authentication authentication,
+                String codeartifactRepositoryUrl,
+                List<String> repositoryIds) {
+            this.delegate = delegate;
+            this.authentication = authentication;
+            this.codeartifactRepositoryUrl = codeartifactRepositoryUrl;
+            this.repositoryIds = repositoryIds;
+        }
+
+        @Override
+        public org.eclipse.aether.repository.Authentication getAuthentication(RemoteRepository repository) {
+            if (repository != null && isCodeartifactRepository(repository)) {
+                return authentication;
+            }
+            return delegate == null ? null : delegate.getAuthentication(repository);
+        }
+
+        private boolean isCodeartifactRepository(RemoteRepository repository) {
+            return repositoryIds.contains(repository.getId())
+                    || Objects.equals(codeartifactRepositoryUrl, repository.getUrl());
+        }
+    }
+
+    private static final class CodeartifactMirrorSelector implements MirrorSelector {
+        private final MirrorSelector delegate;
+        private final org.eclipse.aether.repository.Authentication authentication;
+        private final String codeartifactRepositoryUrl;
+
+        private CodeartifactMirrorSelector(
+                MirrorSelector delegate,
+                org.eclipse.aether.repository.Authentication authentication,
+                String codeartifactRepositoryUrl) {
+            this.delegate = delegate;
+            this.authentication = authentication;
+            this.codeartifactRepositoryUrl = codeartifactRepositoryUrl;
+        }
+
+        @Override
+        public RemoteRepository getMirror(RemoteRepository repository) {
+            if (repository != null && Objects.equals("central", repository.getId())) {
+                return new RemoteRepository.Builder(MAVEN_CENTRAL_MIRROR_ID, "default", codeartifactRepositoryUrl)
+                        .setAuthentication(authentication)
+                        .build();
+            }
+            return delegate == null ? null : delegate.getMirror(repository);
+        }
     }
 }
