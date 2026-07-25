@@ -49,6 +49,7 @@ import software.amazon.awssdk.services.codeartifact.model.PackageVersionStatus;
 import software.amazon.awssdk.services.codeartifact.model.PackageVersionSummary;
 
 import javax.inject.Named;
+import javax.inject.Singleton;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.time.Clock;
@@ -63,8 +64,14 @@ import java.util.stream.Collectors;
 
 /**
  * Maven lifecycle participant that configures project repositories for AWS CodeArtifact.
+ *
+ * <p>This component must be a singleton: Maven looks lifecycle participants up from the container separately for
+ * each callback, and the default JSR-330 scope is per-lookup. Without {@code @Singleton},
+ * {@link #afterSessionEnd(MavenSession)} would run on a fresh instance whose {@code configuration} is null, silently
+ * skipping pruning and never closing the CodeArtifact client.</p>
  */
 @Named
+@Singleton
 @SuppressWarnings({"deprecation", "unused"})
 public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticipant {
     static final String DOMAIN_PROPERTY = "codeartifact.domain";

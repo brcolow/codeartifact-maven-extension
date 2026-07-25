@@ -12,11 +12,13 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.EnumSet;
 import java.util.Objects;
 import java.util.Properties;
@@ -70,6 +72,10 @@ final class CodeartifactCacheStore {
         Properties properties = new Properties();
         try (InputStream inputStream = Files.newInputStream(cacheFile)) {
             properties.load(inputStream);
+        } catch (IllegalArgumentException ex) {
+            // A corrupted cache file (for example a malformed Unicode escape sequence) is treated like a cache
+            // miss so the next values are fetched from AWS instead of failing the build.
+            return CacheEntry.empty(coordinates);
         }
 
         if (!FILE_FORMAT_VERSION.equals(properties.getProperty(VERSION_PROPERTY))) {
@@ -79,13 +85,18 @@ final class CodeartifactCacheStore {
             return CacheEntry.empty(coordinates);
         }
 
-        return new CacheEntry(
-                coordinates,
-                normalize(properties.getProperty(REPOSITORY_ENDPOINT_PROPERTY)),
-                parseInstant(properties.getProperty(ENDPOINT_CACHED_AT_PROPERTY)),
-                normalize(properties.getProperty(AUTHORIZATION_TOKEN_PROPERTY)),
-                parseInstant(properties.getProperty(TOKEN_EXPIRES_AT_PROPERTY)),
-                parseInstant(properties.getProperty(TOKEN_CACHED_AT_PROPERTY)));
+        try {
+            return new CacheEntry(
+                    coordinates,
+                    normalize(properties.getProperty(REPOSITORY_ENDPOINT_PROPERTY)),
+                    parseInstant(properties.getProperty(ENDPOINT_CACHED_AT_PROPERTY)),
+                    normalize(properties.getProperty(AUTHORIZATION_TOKEN_PROPERTY)),
+                    parseInstant(properties.getProperty(TOKEN_EXPIRES_AT_PROPERTY)),
+                    parseInstant(properties.getProperty(TOKEN_CACHED_AT_PROPERTY)));
+        } catch (DateTimeParseException ex) {
+            // A corrupted timestamp is treated like a cache miss for the same reason.
+            return CacheEntry.empty(coordinates);
+        }
     }
 
     void save(CacheEntry cacheEntry) throws IOException {
@@ -96,12 +107,12 @@ final class CodeartifactCacheStore {
         cacheEntry.writeTo(properties);
 
         Path tempFile = cacheFile.resolveSibling(cacheFile.getFileName() + ".tmp");
+        createOwnerOnlyFile(tempFile);
         try (OutputStream outputStream = Files.newOutputStream(tempFile,
-                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
+                StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
             properties.store(outputStream, null);
         }
 
-        applyOwnerOnlyPermissions(tempFile);
         try {
             Files.move(tempFile, cacheFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (AtomicMoveNotSupportedException ex) {
@@ -144,6 +155,20 @@ final class CodeartifactCacheStore {
                 .resolve(CACHE_VERSION_DIRECTORY)
                 .resolve(LOCKS_DIRECTORY)
                 .resolve(coordinates.cacheKey() + LOCK_FILE_EXTENSION);
+    }
+
+    private void createOwnerOnlyFile(Path path) throws IOException {
+        Files.deleteIfExists(path);
+        try {
+            // Create the file with owner-only permissions before any token bytes are written to it, so there is no
+            // window in which other users can read the file's contents.
+            Files.createFile(path, PosixFilePermissions.asFileAttribute(EnumSet.of(
+                    PosixFilePermission.OWNER_READ,
+                    PosixFilePermission.OWNER_WRITE)));
+        } catch (UnsupportedOperationException ex) {
+            // Non-POSIX file systems (such as NTFS) govern access through the parent directory's ACLs.
+            Files.createFile(path);
+        }
     }
 
     private void applyOwnerOnlyPermissions(Path path) {
