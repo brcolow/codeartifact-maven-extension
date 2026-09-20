@@ -2,6 +2,7 @@ package com.brcolow.codeartifact;
 
 import org.apache.maven.AbstractMavenLifecycleParticipant;
 import org.apache.maven.MavenExecutionException;
+import org.apache.maven.RepositoryUtils;
 import org.apache.maven.artifact.repository.ArtifactRepository;
 import org.apache.maven.artifact.repository.ArtifactRepositoryPolicy;
 import org.apache.maven.artifact.repository.Authentication;
@@ -14,15 +15,19 @@ import org.apache.maven.settings.Mirror;
 import org.apache.maven.settings.Server;
 import org.eclipse.aether.DefaultRepositorySystemSession;
 import org.eclipse.aether.RepositorySystemSession;
+import org.eclipse.aether.repository.AuthenticationContext;
 import org.eclipse.aether.repository.AuthenticationSelector;
 import org.eclipse.aether.repository.MirrorSelector;
 import org.eclipse.aether.repository.RemoteRepository;
 import org.eclipse.aether.util.repository.AuthenticationBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import software.amazon.awssdk.auth.credentials.AwsCredentials;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.ProfileCredentialsProvider;
+import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.core.exception.SdkClientException;
 import software.amazon.awssdk.core.exception.SdkException;
 import software.amazon.awssdk.http.urlconnection.UrlConnectionHttpClient;
 import software.amazon.awssdk.profiles.ProfileFile;
@@ -35,6 +40,7 @@ import software.amazon.awssdk.regions.providers.InstanceProfileRegionProvider;
 import software.amazon.awssdk.regions.providers.SystemSettingsRegionProvider;
 import software.amazon.awssdk.services.codeartifact.CodeartifactClient;
 import software.amazon.awssdk.services.codeartifact.model.DeletePackageVersionsRequest;
+import software.amazon.awssdk.services.codeartifact.model.DeletePackageVersionsResponse;
 import software.amazon.awssdk.services.codeartifact.model.GetAuthorizationTokenRequest;
 import software.amazon.awssdk.services.codeartifact.model.GetAuthorizationTokenResponse;
 import software.amazon.awssdk.services.codeartifact.model.GetRepositoryEndpointRequest;
@@ -93,10 +99,15 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
     private static final Logger logger = LoggerFactory.getLogger(CodeartifactRepositorySetter.class);
 
     private CodeartifactClient codeartifactClient;
+    private AwsCredentialsProvider codeartifactCredentialsProvider;
+    private AwsCredentials codeartifactClientCredentials;
     private String codeartifactClientProfile;
     private Region codeartifactClientRegion;
     private CodeartifactCacheStore cacheStore;
     private Configuration configuration;
+    private Configuration repositoryConfiguration;
+    private ArtifactRepository sessionRepository;
+    private List<Mirror> bootstrapMirrors;
 
     /**
      * Creates the CodeArtifact repository lifecycle participant.
@@ -105,16 +116,65 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
     }
 
     @Override
-    public void afterProjectsRead(final MavenSession session) throws MavenExecutionException {
-        configuration = loadConfiguration(effectiveProperties(session));
-
-        ArtifactRepository codeartifactRepository;
+    public void afterSessionStart(final MavenSession session) throws MavenExecutionException {
+        configuration = null;
+        repositoryConfiguration = null;
+        sessionRepository = null;
+        bootstrapMirrors = null;
+        Properties properties = BootstrapProperties.load(session);
+        for (String required : List.of(DOMAIN_PROPERTY, DOMAIN_OWNER_PROPERTY, REPOSITORY_PROPERTY)) {
+            if (normalize(properties.getProperty(required)) == null) {
+                return; // Configuration may be inherited from a parent that Maven can already resolve.
+            }
+        }
+        for (String name : properties.stringPropertyNames()) {
+            if (name.startsWith("codeartifact.") && properties.getProperty(name).contains("${")) {
+                return; // Defer properties requiring the effective project model to afterProjectsRead.
+            }
+        }
+        Configuration bootstrapConfiguration = loadConfiguration(properties);
+        ArtifactRepository repository;
         try {
-            codeartifactRepository = getCodeartifactRepository(configuration);
+            repository = repositoryForSession(bootstrapConfiguration);
+        } catch (MavenExecutionException ex) {
+            // An already resolvable parent may supply a different AWS profile or region.
+            logger.warn("Could not bootstrap CodeArtifact before project discovery. "
+                    + "Will retry with the effective project configuration.", ex);
+            return;
+        }
+        configureRepositoryProxy(session.getRepositorySession(), repository);
+        MavenExecutionRequest request = session.getRequest();
+        // Keep bootstrap repositories until the effective project configuration determines source-of-truth mode.
+        request.setRemoteRepositories(addCodeartifactRepository(request.getRemoteRepositories(), repository));
+        request.setPluginArtifactRepositories(addCodeartifactRepository(request.getPluginArtifactRepositories(), repository));
+        request.setServers(addOrReplaceCodeartifactServers(request.getServers(), repository.getAuthentication(), bootstrapConfiguration));
+        configureRepositorySessionAuthentication(session, repository, bootstrapConfiguration, true);
+        if (bootstrapConfiguration.isSourceOfTruth()) {
+            bootstrapMirrors = new ArrayList<>(request.getMirrors());
+            request.setMirrors(addOrReplaceMavenCentralMirror(request.getMirrors(), repository));
+        }
+        configureProjectBuildingRepositories(session);
+    }
+
+    private ArtifactRepository repositoryForSession(Configuration requestedConfiguration) throws MavenExecutionException {
+        if (sessionRepository != null && requestedConfiguration.hasSameRepositoryConfiguration(repositoryConfiguration)) {
+            return sessionRepository;
+        }
+        try {
+            sessionRepository = getCodeartifactRepository(requestedConfiguration);
+            repositoryConfiguration = requestedConfiguration;
+            return sessionRepository;
         } catch (SdkException ex) {
+            closeCodeArtifactClient();
             throw new MavenExecutionException("Failed to configure the CodeArtifact repository.", ex);
         }
+    }
 
+    @Override
+    public void afterProjectsRead(final MavenSession session) throws MavenExecutionException {
+        configuration = loadConfiguration(effectiveProperties(session));
+        ArtifactRepository codeartifactRepository = repositoryForSession(configuration);
+        configureRepositoryProxy(session.getRepositorySession(), codeartifactRepository);
         configureExecutionRequestRepositories(session.getRequest(), codeartifactRepository, configuration);
         configureRepositorySessionAuthentication(session, codeartifactRepository, configuration);
 
@@ -125,7 +185,16 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         if (configuration.isSourceOfTruth()) {
             session.getRequest().setMirrors(addOrReplaceMavenCentralMirror(
                     session.getRequest().getMirrors(), codeartifactRepository));
+        } else if (bootstrapMirrors != null) {
+            session.getRequest().setMirrors(bootstrapMirrors);
         }
+        configureProjectBuildingRepositories(session);
+    }
+
+    private void configureProjectBuildingRepositories(MavenSession session) {
+        session.getProjectBuildingRequest()
+                .setRemoteRepositories(session.getRequest().getRemoteRepositories())
+                .setPluginArtifactRepositories(session.getRequest().getPluginArtifactRepositories());
     }
 
     @Override
@@ -135,9 +204,11 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
                 pruneUnlistedVersions(configuration);
             }
         } catch (SdkException ex) {
-            throw new MavenExecutionException("Failed to prune unlisted CodeArtifact package versions.", ex);
+            throw new MavenExecutionException("Failed to prune unlisted CodeArtifact package versions: " + ex.getMessage(), ex);
         } finally {
             closeCodeArtifactClient();
+            sessionRepository = null;
+            repositoryConfiguration = null;
         }
     }
 
@@ -230,6 +301,29 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         project.setReleaseArtifactRepository(codeartifactRepository);
     }
 
+    void configureRepositoryProxy(RepositorySystemSession session, ArtifactRepository repository) {
+        if (session == null) {
+            return;
+        }
+        RemoteRepository remote = RepositoryUtils.toRepo(repository);
+        org.eclipse.aether.repository.Proxy selected = session.getProxySelector().getProxy(remote);
+        org.apache.maven.repository.Proxy proxy = null;
+        if (selected != null) {
+            proxy = new org.apache.maven.repository.Proxy();
+            proxy.setProtocol(selected.getType());
+            proxy.setHost(selected.getHost());
+            proxy.setPort(selected.getPort());
+            remote = new RemoteRepository.Builder(remote).setProxy(selected).build();
+            try (AuthenticationContext context = AuthenticationContext.forProxy(session, remote)) {
+                if (context != null) {
+                    proxy.setUserName(context.get(AuthenticationContext.USERNAME));
+                    proxy.setPassword(context.get(AuthenticationContext.PASSWORD));
+                }
+            }
+        }
+        repository.setProxy(proxy);
+    }
+
     void configureExecutionRequestRepositories(
             MavenExecutionRequest request, ArtifactRepository codeartifactRepository, Configuration configuration) {
         if (request == null) {
@@ -281,6 +375,11 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
 
     void configureRepositorySessionAuthentication(
             MavenSession session, ArtifactRepository codeartifactRepository, Configuration configuration) {
+        configureRepositorySessionAuthentication(session, codeartifactRepository, configuration, false);
+    }
+
+    private void configureRepositorySessionAuthentication(
+            MavenSession session, ArtifactRepository codeartifactRepository, Configuration configuration, boolean bootstrap) {
         RepositorySystemSession repositorySession = session.getRepositorySession();
         Authentication authentication = codeartifactRepository.getAuthentication();
         if (repositorySession == null || authentication == null) {
@@ -288,19 +387,34 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         }
 
         org.eclipse.aether.repository.Authentication resolverAuthentication = resolverAuthentication(authentication);
+        AuthenticationSelector originalAuthentication = repositorySession.getAuthenticationSelector();
+        if (originalAuthentication instanceof CodeartifactAuthenticationSelector) {
+            originalAuthentication = ((CodeartifactAuthenticationSelector) originalAuthentication).delegate;
+        }
+        MirrorSelector originalMirrors = repositorySession.getMirrorSelector();
+        if (originalMirrors instanceof CodeartifactMirrorSelector) {
+            originalMirrors = ((CodeartifactMirrorSelector) originalMirrors).delegate;
+        }
         AuthenticationSelector authenticationSelector = new CodeartifactAuthenticationSelector(
-                repositorySession.getAuthenticationSelector(),
+                originalAuthentication,
                 resolverAuthentication,
                 codeartifactRepository.getUrl(),
                 codeartifactRepositoryIds(configuration));
-        DefaultRepositorySystemSession configuredSession = new DefaultRepositorySystemSession(repositorySession);
+        // Maven retains this session while installing the reactor workspace reader after project discovery.
+        DefaultRepositorySystemSession configuredSession = bootstrap && repositorySession instanceof DefaultRepositorySystemSession
+                ? (DefaultRepositorySystemSession) repositorySession : new DefaultRepositorySystemSession(repositorySession);
         configuredSession.setAuthenticationSelector(authenticationSelector);
+        configuredSession.setMirrorSelector(originalMirrors);
         if (configuration.isSourceOfTruth()) {
             configuredSession.setMirrorSelector(new CodeartifactMirrorSelector(
-                    repositorySession.getMirrorSelector(), resolverAuthentication, codeartifactRepository.getUrl()));
+                    originalMirrors, resolverAuthentication, codeartifactRepository.getUrl()));
         }
-        configuredSession.setReadOnly();
-        replaceRepositorySession(session, configuredSession);
+        if (!bootstrap) {
+            configuredSession.setReadOnly();
+        }
+        if (configuredSession != repositorySession) {
+            replaceRepositorySession(session, configuredSession);
+        }
     }
 
     List<Mirror> addOrReplaceMavenCentralMirror(List<Mirror> mirrors, ArtifactRepository codeartifactRepository) {
@@ -411,7 +525,7 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
             logger.info("Pruning {} unlisted version(s) for package: {}:{}",
                     unlistedVersions.size(), packageSummary.namespace(), packageSummary.packageValue());
             for (List<String> versionBatch : partition(unlistedVersions, DELETE_BATCH_SIZE)) {
-                getCodeArtifactClient(configuration).deletePackageVersions(
+                DeletePackageVersionsResponse response = getCodeArtifactClient(configuration).deletePackageVersions(
                         DeletePackageVersionsRequest.builder()
                                 .domain(configuration.getDomain())
                                 .domainOwner(configuration.getDomainOwner())
@@ -422,6 +536,14 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
                                 .expectedStatus(PackageVersionStatus.UNLISTED)
                                 .versions(versionBatch)
                                 .build());
+                if (!response.failedVersions().isEmpty()) {
+                    String failures = response.failedVersions().entrySet().stream()
+                            .map(entry -> entry.getKey() + " (" + entry.getValue().errorCodeAsString()
+                                    + ": " + entry.getValue().errorMessage() + ")")
+                            .collect(Collectors.joining(", "));
+                    throw SdkClientException.create("Could not delete versions of " + packageSummary.namespace()
+                            + ":" + packageSummary.packageValue() + ": " + failures);
+                }
             }
         }
     }
@@ -491,7 +613,8 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
             boolean cacheEnabled) {
         CodeartifactClient client = getCodeArtifactClient(profile, region);
         CodeartifactCacheStore.CacheCoordinates cacheCoordinates = CodeartifactCacheStore.coordinates(
-                getCodeArtifactRegion(profile, region).id(), domain, domainOwner, repository, profile);
+                codeartifactClientRegion.id(), domain, domainOwner, repository, profile,
+                codeartifactClientCredentials.accessKeyId());
         CodeartifactCacheStore.CacheEntry cacheEntry = cacheEnabled
                 ? getOrRefreshCacheEntry(client, cacheCoordinates, domain, domainOwner, repository, durationSeconds)
                 : fetchUncachedEntry(client, cacheCoordinates, domain, domainOwner, repository, durationSeconds);
@@ -521,20 +644,29 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
     CodeartifactClient getCodeArtifactClient(String profile, String region) {
         String normalizedProfile = normalize(profile);
         Region resolvedRegion = resolveRegion(normalizedProfile, normalize(region));
-        if (codeartifactClient == null
+        if (codeartifactCredentialsProvider == null
                 || !Objects.equals(codeartifactClientProfile, normalizedProfile)
                 || !Objects.equals(codeartifactClientRegion, resolvedRegion)) {
             closeCodeArtifactClient();
             codeartifactClientRegion = resolvedRegion;
-            codeartifactClient = createCodeArtifactClient(normalizedProfile, resolvedRegion);
             codeartifactClientProfile = normalizedProfile;
+            codeartifactCredentialsProvider = getCredentialsProvider(normalizedProfile);
+        }
+        AwsCredentials credentials = codeartifactCredentialsProvider.resolveCredentials();
+        if (codeartifactClient == null || !Objects.equals(codeartifactClientCredentials, credentials)) {
+            if (codeartifactClient != null) {
+                codeartifactClient.close();
+            }
+            codeartifactClientCredentials = credentials;
+            codeartifactClient = createCodeArtifactClient(normalizedProfile, resolvedRegion);
         }
         return codeartifactClient;
     }
 
     CodeartifactClient createCodeArtifactClient(String profile, Region region) {
         return CodeartifactClient.builder()
-                .credentialsProvider(getCredentialsProvider(profile))
+                // Use the same credentials for the cache identity and the requests that populate that entry.
+                .credentialsProvider(StaticCredentialsProvider.create(codeartifactClientCredentials))
                 .httpClientBuilder(UrlConnectionHttpClient.builder())
                 .region(region)
                 .build();
@@ -582,6 +714,9 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
             codeartifactClient.close();
         }
         codeartifactClient = null;
+        codeartifactCredentialsProvider = null;
+        codeartifactClientCredentials = null;
+        codeartifactClientProfile = null;
         codeartifactClientRegion = null;
     }
 
@@ -603,15 +738,6 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         }
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
-    }
-
-    private Region getCodeArtifactRegion(String profile) {
-        return getCodeArtifactRegion(profile, null);
-    }
-
-    private Region getCodeArtifactRegion(String profile, String region) {
-        getCodeArtifactClient(profile, region);
-        return codeartifactClientRegion;
     }
 
     CodeartifactCacheStore getCacheStore() {

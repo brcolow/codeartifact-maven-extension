@@ -26,12 +26,12 @@ import java.util.Set;
 
 final class CodeartifactCacheStore {
     private static final String CACHE_DIRECTORY_NAME = "codeartifact-maven-extension";
-    private static final String CACHE_VERSION_DIRECTORY = "v1";
+    private static final String CACHE_VERSION_DIRECTORY = "v2";
     private static final String ENTRIES_DIRECTORY = "entries";
     private static final String LOCKS_DIRECTORY = "locks";
     private static final String CACHE_FILE_EXTENSION = ".properties";
     private static final String LOCK_FILE_EXTENSION = ".lock";
-    private static final String FILE_FORMAT_VERSION = "1";
+    private static final String FILE_FORMAT_VERSION = "2";
     private static final String VERSION_PROPERTY = "version";
     private static final String REGION_PROPERTY = "region";
     private static final String DOMAIN_PROPERTY = "domain";
@@ -39,6 +39,7 @@ final class CodeartifactCacheStore {
     private static final String REPOSITORY_PROPERTY = "repository";
     private static final String AUTH_MODE_PROPERTY = "authMode";
     private static final String PROFILE_PROPERTY = "profile";
+    private static final String CREDENTIAL_IDENTITY_PROPERTY = "credentialIdentity";
     private static final String REPOSITORY_ENDPOINT_PROPERTY = "repositoryEndpoint";
     private static final String ENDPOINT_CACHED_AT_PROPERTY = "endpointCachedAt";
     private static final String AUTHORIZATION_TOKEN_PROPERTY = "authorizationToken";
@@ -133,14 +134,16 @@ final class CodeartifactCacheStore {
         }
     }
 
-    static CacheCoordinates coordinates(String region, String domain, String domainOwner, String repository, String profile) {
+    static CacheCoordinates coordinates(
+            String region, String domain, String domainOwner, String repository, String profile, String accessKeyId) {
         return new CacheCoordinates(
                 normalize(region),
                 normalize(domain),
                 normalize(domainOwner),
                 normalize(repository),
                 profile == null ? "default" : "profile",
-                normalize(profile));
+                normalize(profile),
+                sha256(Objects.requireNonNull(accessKeyId, "accessKeyId")));
     }
 
     private Path cacheFile(CacheCoordinates coordinates) {
@@ -218,6 +221,19 @@ final class CodeartifactCacheStore {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
+    private static String sha256(String value) {
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
+            StringBuilder builder = new StringBuilder(hash.length * 2);
+            for (byte hashByte : hash) {
+                builder.append(String.format("%02x", hashByte));
+            }
+            return builder.toString();
+        } catch (NoSuchAlgorithmException ex) {
+            throw new IllegalStateException("SHA-256 is not available.", ex);
+        }
+    }
+
     static final class CacheCoordinates {
         private final String region;
         private final String domain;
@@ -225,14 +241,17 @@ final class CodeartifactCacheStore {
         private final String repository;
         private final String authMode;
         private final String profile;
+        private final String credentialIdentity;
 
-        private CacheCoordinates(String region, String domain, String domainOwner, String repository, String authMode, String profile) {
+        private CacheCoordinates(String region, String domain, String domainOwner, String repository,
+                                 String authMode, String profile, String credentialIdentity) {
             this.region = region;
             this.domain = domain;
             this.domainOwner = domainOwner;
             this.repository = repository;
             this.authMode = authMode;
             this.profile = profile;
+            this.credentialIdentity = credentialIdentity;
         }
 
         String cacheKey() {
@@ -242,18 +261,9 @@ final class CodeartifactCacheStore {
                     domainOwner,
                     repository,
                     authMode,
-                    profile == null ? "" : profile);
-            try {
-                MessageDigest digest = MessageDigest.getInstance("SHA-256");
-                byte[] hash = digest.digest(rawKey.getBytes(StandardCharsets.UTF_8));
-                StringBuilder builder = new StringBuilder(hash.length * 2);
-                for (byte value : hash) {
-                    builder.append(String.format("%02x", value));
-                }
-                return builder.toString();
-            } catch (NoSuchAlgorithmException ex) {
-                throw new IllegalStateException("SHA-256 is not available.", ex);
-            }
+                    profile == null ? "" : profile,
+                    credentialIdentity);
+            return sha256(rawKey);
         }
 
         boolean matches(Properties properties) {
@@ -262,7 +272,8 @@ final class CodeartifactCacheStore {
                     && Objects.equals(domainOwner, normalize(properties.getProperty(DOMAIN_OWNER_PROPERTY)))
                     && Objects.equals(repository, normalize(properties.getProperty(REPOSITORY_PROPERTY)))
                     && Objects.equals(authMode, normalize(properties.getProperty(AUTH_MODE_PROPERTY)))
-                    && Objects.equals(profile, normalize(properties.getProperty(PROFILE_PROPERTY)));
+                    && Objects.equals(profile, normalize(properties.getProperty(PROFILE_PROPERTY)))
+                    && Objects.equals(credentialIdentity, properties.getProperty(CREDENTIAL_IDENTITY_PROPERTY));
         }
     }
 
@@ -330,6 +341,7 @@ final class CodeartifactCacheStore {
             properties.setProperty(DOMAIN_OWNER_PROPERTY, coordinates.domainOwner);
             properties.setProperty(REPOSITORY_PROPERTY, coordinates.repository);
             properties.setProperty(AUTH_MODE_PROPERTY, coordinates.authMode);
+            properties.setProperty(CREDENTIAL_IDENTITY_PROPERTY, coordinates.credentialIdentity);
             if (coordinates.profile != null) {
                 properties.setProperty(PROFILE_PROPERTY, coordinates.profile);
             }

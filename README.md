@@ -1,4 +1,4 @@
-﻿## Extension Purpose
+## Extension Purpose
 
 Automatically retrieves a CodeArtifact authorization token, discovers the repository endpoint, and configures Maven to
 use your CodeArtifact repository for dependency resolution and publishing.
@@ -69,13 +69,16 @@ You can also add it as a build extension in `pom.xml`:
 
 ### Bootstrap Caveat
 
-Maven loads `.mvn/extensions.xml` as a
-[core extension descriptor](https://maven.apache.org/guides/mini/guide-using-extensions.html) before this extension can
-configure project repositories. That means the extension artifact itself must already be resolvable through Maven's
-normal bootstrap resolution path, such as Maven Central, your local repository, or repositories/mirrors configured in
-`settings.xml`. Because this extension is published to Maven Central, most projects do not need extra setup. Private
-forks or unpublished versions should be installed locally or made available through `settings.xml`; the extension cannot
-use CodeArtifact to download itself on the first run.
+Maven downloads this extension and its dependencies from Maven Central by default. If `settings.xml` routes those
+downloads through CodeArtifact, [configure Maven authentication](https://docs.aws.amazon.com/codeartifact/latest/ug/maven-mvn.html) first;
+the extension cannot provide credentials for its own download.
+
+Load this as a core extension (normally through `.mvn/extensions.xml`) if it must authenticate parent POM or imported
+BOM downloads while Maven reads your own project. A POM `<build><extensions>` declaration runs too late for that step.
+It can still work when those POMs are cached, publicly accessible, or already authenticated through `settings.xml`.
+
+Bootstrap `codeartifact.*` properties must be available in the local POM, an active settings profile, or `-D` options
+before the parent or BOM is downloaded.
 
 ## AWS Authentication
 
@@ -175,6 +178,7 @@ Optional properties:
   Default: `false`
   If `true`, the extension deletes unlisted package versions from the configured CodeArtifact repository after the
   Maven session ends.
+  Per-version deletion failures fail the Maven session and report the package, version, and AWS error.
 
 The extension fails fast when required properties are missing or when `codeartifact.durationSeconds` or
 any boolean property is invalid.
@@ -214,6 +218,11 @@ token.
 
 Set `codeartifact.cache.enabled=false` if you do not want the extension to store CodeArtifact authorization tokens on
 disk.
+
+Cache entries are partitioned by a fingerprint of the resolved AWS access key ID as well as the repository and profile.
+Switching `AWS_PROFILE` or rotating credentials therefore cannot reuse a token issued to a different identity. The SDK
+must be able to resolve the current AWS credentials even for a cache hit; the access key ID itself is not written to
+the cache. Entries from the older cache format are ignored and refreshed automatically.
 
 ## Known Issues
 

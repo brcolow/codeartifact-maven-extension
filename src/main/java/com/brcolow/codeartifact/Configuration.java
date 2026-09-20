@@ -1,5 +1,7 @@
 package com.brcolow.codeartifact;
 
+import java.util.Objects;
+
 final class Configuration {
     private final String domain;
     private final String domainOwner;
@@ -93,6 +95,17 @@ final class Configuration {
 
     boolean isCacheEnabled() {
         return cacheEnabled;
+    }
+
+    boolean hasSameRepositoryConfiguration(Configuration other) {
+        return other != null
+                && Objects.equals(domain, other.domain)
+                && Objects.equals(domainOwner, other.domainOwner)
+                && Objects.equals(repository, other.repository)
+                && Objects.equals(profile, other.profile)
+                && Objects.equals(region, other.region)
+                && durationSeconds == other.durationSeconds
+                && cacheEnabled == other.cacheEnabled;
     }
 
     @Override
