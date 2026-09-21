@@ -48,7 +48,7 @@ Create or update `.mvn/extensions.xml` in your project:
   <extension>
     <groupId>io.github.brcolow</groupId>
     <artifactId>codeartifact-maven-extension</artifactId>
-    <version>0.0.8</version>
+    <version>0.0.9</version>
   </extension>
 </extensions>
 ```
@@ -61,7 +61,7 @@ You can also add it as a build extension in `pom.xml`:
     <extension>
       <groupId>io.github.brcolow</groupId>
       <artifactId>codeartifact-maven-extension</artifactId>
-      <version>0.0.8</version>
+      <version>0.0.9</version>
     </extension>
   </extensions>
 </build>
@@ -244,11 +244,16 @@ Run the test suite with:
 
 ## Publish New Release
 
-The `release` profile attaches sources and Javadocs, signs artifacts, and enables Maven Central publishing.
+The `release` profile attaches sources and Javadocs, signs artifacts, and publishes to Maven Central. Configure the
+`maven-central-sonatype` server in `settings.xml` and make your GPG signing key available.
+
+Update the version and SCM tag in `pom.xml` and the README examples, then commit and create the annotated
+`codeartifact-maven-extension-<version>` tag. From that commit, run:
 
 ```shell
-./mvnw versions:set -DnewVersion=<version>
-./mvnw release:clean release:prepare
-./mvnw release:perform
+./mvnw -Prelease clean deploy
+git push origin master codeartifact-maven-extension-<version>
+gh release create codeartifact-maven-extension-<version> --verify-tag --title v<version> --notes-file <release-notes-file> --latest
 ```
 
+The GitHub Release is a separate step from publishing to Maven Central.
