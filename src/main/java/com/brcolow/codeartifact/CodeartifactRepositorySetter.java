@@ -13,6 +13,7 @@ import org.apache.maven.execution.MavenSession;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.settings.Mirror;
 import org.apache.maven.settings.Server;
+import org.codehaus.plexus.component.repository.exception.ComponentLookupException;
 import org.eclipse.aether.DefaultRepositorySystemSession;
 import org.eclipse.aether.RepositorySystemSession;
 import org.eclipse.aether.repository.AuthenticationContext;
@@ -108,6 +109,9 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
     private Configuration repositoryConfiguration;
     private ArtifactRepository sessionRepository;
     private List<Mirror> bootstrapMirrors;
+    private List<Server> bootstrapServers;
+    private ArtifactRepository bootstrapRepository;
+    private RepositorySystemSession mavenProxySession;
 
     /**
      * Creates the CodeArtifact repository lifecycle participant.
@@ -121,6 +125,9 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         repositoryConfiguration = null;
         sessionRepository = null;
         bootstrapMirrors = null;
+        bootstrapServers = null;
+        bootstrapRepository = null;
+        configureAwsProxy(session);
         Properties properties = BootstrapProperties.load(session);
         for (String required : List.of(DOMAIN_PROPERTY, DOMAIN_OWNER_PROPERTY, REPOSITORY_PROPERTY)) {
             if (normalize(properties.getProperty(required)) == null) {
@@ -144,13 +151,17 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         }
         configureRepositoryProxy(session.getRepositorySession(), repository);
         MavenExecutionRequest request = session.getRequest();
+        if (bootstrapConfiguration.isSourceOfTruth()) {
+            bootstrapMirrors = new ArrayList<>(request.getMirrors());
+            bootstrapServers = new ArrayList<>(request.getServers());
+            bootstrapRepository = repository;
+        }
         // Keep bootstrap repositories until the effective project configuration determines source-of-truth mode.
         request.setRemoteRepositories(addCodeartifactRepository(request.getRemoteRepositories(), repository));
         request.setPluginArtifactRepositories(addCodeartifactRepository(request.getPluginArtifactRepositories(), repository));
         request.setServers(addOrReplaceCodeartifactServers(request.getServers(), repository.getAuthentication(), bootstrapConfiguration));
         configureRepositorySessionAuthentication(session, repository, bootstrapConfiguration, true);
         if (bootstrapConfiguration.isSourceOfTruth()) {
-            bootstrapMirrors = new ArrayList<>(request.getMirrors());
             request.setMirrors(addOrReplaceMavenCentralMirror(request.getMirrors(), repository));
         }
         configureProjectBuildingRepositories(session);
@@ -172,11 +183,15 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
 
     @Override
     public void afterProjectsRead(final MavenSession session) throws MavenExecutionException {
+        configureAwsProxy(session);
         configuration = loadConfiguration(effectiveProperties(session));
         ArtifactRepository codeartifactRepository = repositoryForSession(configuration);
         configureRepositoryProxy(session.getRepositorySession(), codeartifactRepository);
-        configureExecutionRequestRepositories(session.getRequest(), codeartifactRepository, configuration);
         configureRepositorySessionAuthentication(session, codeartifactRepository, configuration);
+        if (!configuration.isSourceOfTruth() && bootstrapMirrors != null) {
+            restoreBootstrapMirrors(session);
+        }
+        configureExecutionRequestRepositories(session.getRequest(), codeartifactRepository, configuration);
 
         for (MavenProject project : session.getProjects()) {
             configureProjectRepositories(project, codeartifactRepository, configuration);
@@ -185,10 +200,58 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         if (configuration.isSourceOfTruth()) {
             session.getRequest().setMirrors(addOrReplaceMavenCentralMirror(
                     session.getRequest().getMirrors(), codeartifactRepository));
-        } else if (bootstrapMirrors != null) {
-            session.getRequest().setMirrors(bootstrapMirrors);
         }
         configureProjectBuildingRepositories(session);
+    }
+
+    private void configureAwsProxy(MavenSession session) {
+        mavenProxySession = session.getRequest().getProxies().stream().anyMatch(org.apache.maven.settings.Proxy::isActive)
+                ? session.getRepositorySession() : null;
+    }
+
+    private void restoreBootstrapMirrors(MavenSession session) throws MavenExecutionException {
+        session.getRequest().setMirrors(bootstrapMirrors);
+        session.getRequest().setServers(bootstrapServers);
+        try {
+            org.apache.maven.repository.RepositorySystem repositories = session.getContainer()
+                    .lookup(org.apache.maven.repository.RepositorySystem.class);
+            RepositorySystemSession resolverSession = session.getRepositorySession();
+            session.getRequest().setRemoteRepositories(restoreBootstrapRepositories(
+                    resolverSession, repositories, session.getRequest().getRemoteRepositories()));
+            session.getRequest().setPluginArtifactRepositories(restoreBootstrapRepositories(
+                    resolverSession, repositories, session.getRequest().getPluginArtifactRepositories()));
+            for (MavenProject project : session.getProjects()) {
+                project.setRemoteArtifactRepositories(restoreBootstrapRepositories(
+                        resolverSession, repositories, project.getRemoteArtifactRepositories()));
+                project.setPluginArtifactRepositories(restoreBootstrapRepositories(
+                        resolverSession, repositories, project.getPluginArtifactRepositories()));
+            }
+        } catch (ComponentLookupException ex) {
+            throw new MavenExecutionException("Failed to restore repositories after CodeArtifact bootstrap.", ex);
+        }
+    }
+
+    private List<ArtifactRepository> restoreBootstrapRepositories(RepositorySystemSession session,
+            org.apache.maven.repository.RepositorySystem repositories, List<ArtifactRepository> configured) {
+        List<ArtifactRepository> restored = new ArrayList<>();
+        for (ArtifactRepository repository : configured) {
+            if (MAVEN_CENTRAL_MIRROR_ID.equals(repository.getId())
+                    && bootstrapRepository.getUrl().equals(repository.getUrl())) {
+                for (ArtifactRepository original : repository.getMirroredRepositories()) {
+                    ArtifactRepository copy = new MavenArtifactRepository(original.getId(), original.getUrl(),
+                            original.getLayout(), original.getSnapshots(), original.getReleases());
+                    copy.setBlocked(original.isBlocked());
+                    List<ArtifactRepository> originals = List.of(copy);
+                    repositories.injectMirror(session, originals);
+                    repositories.injectProxy(session, originals);
+                    repositories.injectAuthentication(session, originals);
+                    restored.add(copy);
+                }
+            } else {
+                restored.add(repository);
+            }
+        }
+        return repositories.getEffectiveRepositories(restored);
     }
 
     private void configureProjectBuildingRepositories(MavenSession session) {
@@ -209,6 +272,7 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
             closeCodeArtifactClient();
             sessionRepository = null;
             repositoryConfiguration = null;
+            mavenProxySession = null;
         }
     }
 
@@ -614,7 +678,7 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         CodeartifactClient client = getCodeArtifactClient(profile, region);
         CodeartifactCacheStore.CacheCoordinates cacheCoordinates = CodeartifactCacheStore.coordinates(
                 codeartifactClientRegion.id(), domain, domainOwner, repository, profile,
-                codeartifactClientCredentials.accessKeyId());
+                codeartifactClientCredentials.accessKeyId(), durationSeconds);
         CodeartifactCacheStore.CacheEntry cacheEntry = cacheEnabled
                 ? getOrRefreshCacheEntry(client, cacheCoordinates, domain, domainOwner, repository, durationSeconds)
                 : fetchUncachedEntry(client, cacheCoordinates, domain, domainOwner, repository, durationSeconds);
@@ -667,7 +731,8 @@ public class CodeartifactRepositorySetter extends AbstractMavenLifecycleParticip
         return CodeartifactClient.builder()
                 // Use the same credentials for the cache identity and the requests that populate that entry.
                 .credentialsProvider(StaticCredentialsProvider.create(codeartifactClientCredentials))
-                .httpClientBuilder(UrlConnectionHttpClient.builder())
+                .httpClientBuilder(mavenProxySession == null ? UrlConnectionHttpClient.builder()
+                        : new MavenProxyHttpClient.Builder(mavenProxySession))
                 .region(region)
                 .build();
     }

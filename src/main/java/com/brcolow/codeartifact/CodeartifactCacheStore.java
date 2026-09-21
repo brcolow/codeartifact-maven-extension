@@ -40,6 +40,7 @@ final class CodeartifactCacheStore {
     private static final String AUTH_MODE_PROPERTY = "authMode";
     private static final String PROFILE_PROPERTY = "profile";
     private static final String CREDENTIAL_IDENTITY_PROPERTY = "credentialIdentity";
+    private static final String DURATION_PROPERTY = "durationSeconds";
     private static final String REPOSITORY_ENDPOINT_PROPERTY = "repositoryEndpoint";
     private static final String ENDPOINT_CACHED_AT_PROPERTY = "endpointCachedAt";
     private static final String AUTHORIZATION_TOKEN_PROPERTY = "authorizationToken";
@@ -135,7 +136,8 @@ final class CodeartifactCacheStore {
     }
 
     static CacheCoordinates coordinates(
-            String region, String domain, String domainOwner, String repository, String profile, String accessKeyId) {
+            String region, String domain, String domainOwner, String repository, String profile, String accessKeyId,
+            int durationSeconds) {
         return new CacheCoordinates(
                 normalize(region),
                 normalize(domain),
@@ -143,7 +145,8 @@ final class CodeartifactCacheStore {
                 normalize(repository),
                 profile == null ? "default" : "profile",
                 normalize(profile),
-                sha256(Objects.requireNonNull(accessKeyId, "accessKeyId")));
+                sha256(Objects.requireNonNull(accessKeyId, "accessKeyId")),
+                durationSeconds);
     }
 
     private Path cacheFile(CacheCoordinates coordinates) {
@@ -242,9 +245,10 @@ final class CodeartifactCacheStore {
         private final String authMode;
         private final String profile;
         private final String credentialIdentity;
+        private final int durationSeconds;
 
         private CacheCoordinates(String region, String domain, String domainOwner, String repository,
-                                 String authMode, String profile, String credentialIdentity) {
+                                 String authMode, String profile, String credentialIdentity, int durationSeconds) {
             this.region = region;
             this.domain = domain;
             this.domainOwner = domainOwner;
@@ -252,6 +256,7 @@ final class CodeartifactCacheStore {
             this.authMode = authMode;
             this.profile = profile;
             this.credentialIdentity = credentialIdentity;
+            this.durationSeconds = durationSeconds;
         }
 
         String cacheKey() {
@@ -262,7 +267,8 @@ final class CodeartifactCacheStore {
                     repository,
                     authMode,
                     profile == null ? "" : profile,
-                    credentialIdentity);
+                    credentialIdentity,
+                    Integer.toString(durationSeconds));
             return sha256(rawKey);
         }
 
@@ -273,7 +279,8 @@ final class CodeartifactCacheStore {
                     && Objects.equals(repository, normalize(properties.getProperty(REPOSITORY_PROPERTY)))
                     && Objects.equals(authMode, normalize(properties.getProperty(AUTH_MODE_PROPERTY)))
                     && Objects.equals(profile, normalize(properties.getProperty(PROFILE_PROPERTY)))
-                    && Objects.equals(credentialIdentity, properties.getProperty(CREDENTIAL_IDENTITY_PROPERTY));
+                    && Objects.equals(credentialIdentity, properties.getProperty(CREDENTIAL_IDENTITY_PROPERTY))
+                    && Integer.toString(durationSeconds).equals(properties.getProperty(DURATION_PROPERTY));
         }
     }
 
@@ -342,6 +349,7 @@ final class CodeartifactCacheStore {
             properties.setProperty(REPOSITORY_PROPERTY, coordinates.repository);
             properties.setProperty(AUTH_MODE_PROPERTY, coordinates.authMode);
             properties.setProperty(CREDENTIAL_IDENTITY_PROPERTY, coordinates.credentialIdentity);
+            properties.setProperty(DURATION_PROPERTY, Integer.toString(coordinates.durationSeconds));
             if (coordinates.profile != null) {
                 properties.setProperty(PROFILE_PROPERTY, coordinates.profile);
             }

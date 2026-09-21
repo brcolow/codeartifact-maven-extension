@@ -219,7 +219,8 @@ token.
 Set `codeartifact.cache.enabled=false` if you do not want the extension to store CodeArtifact authorization tokens on
 disk.
 
-Cache entries are partitioned by a fingerprint of the resolved AWS access key ID as well as the repository and profile.
+Cache entries are partitioned by a fingerprint of the resolved AWS access key ID, repository, profile, and requested
+token lifetime.
 Switching `AWS_PROFILE` or rotating credentials therefore cannot reuse a token issued to a different identity. The SDK
 must be able to resolve the current AWS credentials even for a cache hit; the access key ID itself is not written to
 the cache. Entries from the older cache format are ignored and refreshed automatically.
